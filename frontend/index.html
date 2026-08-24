@@ -4,138 +4,155 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>UCLA Course Planner</title>
-  <style>
-    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #f6f7fb; color: #172033; }
-    * { box-sizing: border-box; }
-    body { margin: 0; }
-    main { max-width: 1120px; margin: 0 auto; padding: 32px 20px 56px; }
-    header { margin-bottom: 24px; }
-    h1 { margin: 0 0 8px; font-size: clamp(2rem, 5vw, 3.5rem); letter-spacing: -.04em; }
-    h2 { margin: 0 0 16px; font-size: 1.2rem; }
-    p { color: #59657a; line-height: 1.55; }
-    .eyebrow { color: #4f46e5; font-size: .75rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
-    .grid { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .full { grid-column: 1 / -1; }
-    .card { background: white; border: 1px solid #dfe3ec; border-radius: 16px; padding: 20px; box-shadow: 0 8px 28px #1d29420d; }
-    label { display: grid; gap: 6px; color: #3d4960; font-size: .86rem; font-weight: 700; }
-    input, select, textarea { width: 100%; border: 1px solid #cbd2df; border-radius: 9px; padding: 10px 11px; background: #fff; color: #172033; font: inherit; }
-    textarea { min-height: 92px; resize: vertical; }
-    .hint { font-size: .8rem; color: #718096; font-weight: 500; }
-    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
-    button { border: 0; border-radius: 9px; padding: 11px 15px; cursor: pointer; font: inherit; font-weight: 800; }
-    .primary { background: #4f46e5; color: white; }
-    .secondary { background: #e9eaf8; color: #3730a3; }
-    button:disabled { cursor: wait; opacity: .6; }
-    pre { margin: 0; max-height: 560px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 10px; padding: 16px; background: #111827; color: #e5e7eb; line-height: 1.55; }
-    .status { min-height: 24px; margin: 12px 0 0; color: #59657a; }
-    .warning { border-left: 4px solid #d97706; background: #fff8eb; padding: 12px 14px; border-radius: 8px; color: #754c08; }
-    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } .full { grid-column: auto; } }
-  </style>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/app/styles.css" />
 </head>
 <body>
-<main>
-  <header>
-    <div class="eyebrow">Local test surface</div>
-    <h1>UCLA Course Planner</h1>
-    <p>Run the deterministic planner directly, or try conversational intake with your own OpenAI-compatible model key. This page is served by FastAPI and does not require ASI:One.</p>
+<main class="shell">
+  <header class="hero">
+    <p class="eyebrow">UCLA Course Planner</p>
+    <h1>Upload your DARS.<br />Fill in the gaps. Run.</h1>
+    <p class="lede">The report is read locally by this app. No model key is required to build a schedule.</p>
   </header>
 
-  <section class="card">
-    <h2>1. Student profile</h2>
-    <div class="grid">
-      <label>Name<input id="name" value="Alex Student" /></label>
-      <label>Major<input id="major" value="Computer Science" /></label>
-      <label>Year<select id="year"><option>freshman</option><option>sophomore</option><option selected>junior</option><option>senior</option><option>graduate</option></select></label>
-      <label>GPA<input id="gpa" type="number" min="0" max="4" step=".01" value="3.6" /></label>
-      <label>Units completed<input id="units" type="number" min="0" step="1" value="96" /></label>
-      <label>Enrollment pass<select id="pass"><option value="pass_1">Pass 1</option><option value="pass_2">Pass 2</option><option value="open">Open enrollment</option></select></label>
-      <label>Pass opens<input id="passOpen" value="2026-08-28 09:00" /></label>
-      <label>Term<input id="term" value="Fall 2026" /></label>
+  <nav class="progress" aria-label="Planner steps">
+    <span><b>1</b> Read DARS</span>
+    <span><b>2</b> Planning details</span>
+    <span><b>3</b> Results</span>
+  </nav>
+
+  <section class="panel" id="darsStep">
+    <div class="section-heading">
+      <span class="step-number">1</span>
+      <div>
+        <h2>Start with your DARS</h2>
+        <p>Upload the PDF and review the courses we find before they enter the planner.</p>
+      </div>
+    </div>
+
+    <label class="drop-zone" for="darsPdf">
+      <strong id="fileLabel">Choose a DARS PDF</strong>
+      <span>PDF up to 15 MB</span>
+      <input id="darsPdf" type="file" accept="application/pdf" />
+    </label>
+
+    <details class="paste-option">
+      <summary>Paste DARS text instead</summary>
+      <label for="darsText">DARS text</label>
+      <textarea id="darsText" placeholder="Paste the text from your degree audit"></textarea>
+    </details>
+
+    <div class="actions">
+      <button class="primary" id="parseButton">Read DARS</button>
+      <button class="quiet" id="skipButton">Continue without DARS</button>
+      <button class="quiet" id="exampleButton">Use test example</button>
+    </div>
+    <p class="status" id="parseStatus" role="status"></p>
+
+    <div class="review" id="darsReview" hidden>
+      <div class="review-summary">
+        <strong id="courseCount">0 course codes found</strong>
+        <span>Review this list—DARS layouts vary, so you can correct it.</span>
+      </div>
+      <label for="darsCourses">Completed or in-progress courses</label>
+      <textarea id="darsCourses" placeholder="COM SCI 31, MATH 31A"></textarea>
+    </div>
+  </section>
+
+  <section class="panel" id="detailsStep" hidden>
+    <div class="section-heading">
+      <span class="step-number">2</span>
+      <div>
+        <h2>Add what DARS does not know</h2>
+        <p>Tell the planner what you need next and the schedule constraints that matter.</p>
+      </div>
+    </div>
+
+    <div class="form-grid">
+      <label>Name<input id="name" autocomplete="name" placeholder="Alex Student" /></label>
+      <label>Major<input id="major" placeholder="Computer Science" /></label>
+      <label>Term<input id="term" placeholder="Fall 2026" value="Fall 2026" /></label>
+      <label>Class level
+        <select id="year">
+          <option>freshman</option><option>sophomore</option><option selected>junior</option>
+          <option>senior</option><option>graduate</option>
+        </select>
+      </label>
+      <label class="wide">Courses you need
+        <input id="required" placeholder="COM SCI 111, COM SCI 118" />
+        <span class="hint">At least one course is required.</span>
+      </label>
+      <label class="wide">Courses you would like, if possible
+        <input id="preferred" placeholder="MATH 115A" />
+      </label>
+      <label>GPA<input id="gpa" type="number" min="0" max="4" step=".01" value="0" /></label>
+      <label>Units completed<input id="units" type="number" min="0" step="1" value="0" /></label>
+      <label>Enrollment pass
+        <select id="pass">
+          <option value="pass_1">Pass 1</option>
+          <option value="pass_2">Pass 2</option>
+          <option value="open" selected>Open enrollment</option>
+        </select>
+      </label>
+      <label>Pass opens<input id="passOpen" placeholder="2026-08-28 09:00" /></label>
       <label>Minimum units<input id="minUnits" type="number" min="0" value="12" /></label>
       <label>Maximum units<input id="maxUnits" type="number" min="0" value="16" /></label>
-      <label>Format<select id="format"><option>any</option><option>in-person</option><option>hybrid</option><option>online</option></select></label>
-      <label>Required courses<input id="required" value="COM SCI 31, COM SCI 32, COM SCI 111" placeholder="COM SCI 111, MATH 33A" /></label>
-      <label>Preferred courses<input id="preferred" placeholder="COM SCI 118" /></label>
-      <label class="full">Hard constraints<textarea id="constraints" placeholder="Friday off; no classes before 10:00 am"></textarea></label>
+      <label>Format
+        <select id="format">
+          <option>any</option><option>in-person</option><option>hybrid</option><option>online</option>
+        </select>
+      </label>
+      <label class="wide">Schedule constraints
+        <textarea id="constraints" placeholder="Friday off; no classes before 10:00 am"></textarea>
+      </label>
     </div>
+
+    <details class="byok" id="byokPanel">
+      <summary>
+        <span><strong>Optional: autofill with your own model</strong><small>Bring your own key; it is used for one request and is not stored.</small></span>
+      </summary>
+      <div class="byok-body">
+        <label class="wide">Describe the remaining details in plain English
+          <textarea id="byokMessage" placeholder="I am a junior CS major with a 3.6 GPA. I need COM SCI 111 and want Fridays off..."></textarea>
+        </label>
+        <div class="form-grid compact">
+          <label>Provider
+            <select id="providerPreset">
+              <option value="openai">OpenAI</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="asi_one">ASI:One</option>
+              <option value="custom">Other OpenAI-compatible</option>
+            </select>
+          </label>
+          <label>API key<input id="apiKey" type="password" autocomplete="off" placeholder="Used only for autofill" /></label>
+          <label>Model<input id="modelName" value="gpt-4o-mini" /></label>
+          <label id="baseUrlField" hidden>Base URL<input id="baseUrl" /></label>
+        </div>
+        <div class="actions"><button class="secondary" id="autofillButton">Autofill planning details</button></div>
+        <p class="status" id="autofillStatus" role="status"></p>
+      </div>
+    </details>
+
+    <div class="run-bar">
+      <div><strong>Ready when you are.</strong><span>Planning uses live UCLA course data and can take a few seconds.</span></div>
+      <button class="primary" id="planButton">Run planner</button>
+    </div>
+    <p class="status" id="planStatus" role="status"></p>
   </section>
 
-  <section class="card" style="margin-top:18px">
-    <h2>2. DARS document (optional)</h2>
-    <div class="grid">
-      <label class="full">Paste DARS text<textarea id="darsText" placeholder="Paste completed/in-progress courses here"></textarea></label>
-      <label class="full">Or upload a PDF<input id="darsPdf" type="file" accept="application/pdf" /><span class="hint">The PDF is converted locally to text and course codes are extracted before planning.</span></label>
+  <section class="panel result-panel" id="resultStep" hidden>
+    <div class="section-heading">
+      <span class="step-number success">3</span>
+      <div><h2>Your schedule</h2><p id="resultSummary"></p></div>
     </div>
+    <pre id="result"></pre>
   </section>
 
-  <section class="card" style="margin-top:18px">
-    <h2>3. Choose how to run</h2>
-    <div class="warning">Direct planning uses your structured profile and does not need an LLM key. Conversational intake needs a provider key, base URL, and model name.</div>
-    <div class="grid" style="margin-top:16px">
-      <label>Provider<input id="provider" value="openai_compatible" /></label>
-      <label>Model API key<input id="apiKey" type="password" placeholder="Used only for this request" /></label>
-      <label>Base URL<input id="baseUrl" value="https://api.openai.com/v1" /></label>
-      <label>Model name<input id="modelName" value="gpt-4o-mini" /></label>
-      <label class="full">Conversational message<textarea id="conversation" placeholder="Example: I am Alex, a junior Computer Science major with a 3.6 GPA..."></textarea></label>
-    </div>
-    <div class="actions">
-      <button class="primary" id="planButton">Run direct plan</button>
-      <button class="secondary" id="chatButton">Run conversational intake + plan</button>
-    </div>
-    <div class="status" id="status"></div>
-  </section>
-
-  <section class="card" style="margin-top:18px">
-    <h2>Result</h2>
-    <pre id="result">Your report will appear here.</pre>
-  </section>
+  <footer>
+    This browser is only a lightweight runner. The same planner works without a frontend through the
+    <a href="/docs">HTTP API</a>, CLI, or Python entrypoint.
+  </footer>
 </main>
-<script>
-  const $ = (id) => document.getElementById(id);
-  const splitList = (value) => value.split(/[,;\n]/).map(x => x.trim()).filter(Boolean);
-  const splitConstraints = (value) => value.split(/[;\n]/).map(x => x.trim()).filter(Boolean);
-  const profile = () => ({
-    name: $('name').value.trim(), major: $('major').value.trim(), year: $('year').value,
-    gpa: Number($('gpa').value), units_completed: Number($('units').value),
-    enrollment_pass: $('pass').value, pass_open_datetime: $('passOpen').value.trim(), term: $('term').value.trim(),
-    required_courses: splitList($('required').value), preferred_courses: splitList($('preferred').value),
-    hard_constraints: splitConstraints($('constraints').value), format_preference: $('format').value,
-    min_units: Number($('minUnits').value), max_units: Number($('maxUnits').value)
-  });
-  async function pdfBase64() {
-    const file = $('darsPdf').files[0];
-    if (!file) return null;
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result).split(',')[1]);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-  }
-  const model = () => ({ provider: $('provider').value.trim(), api_key: $('apiKey').value, base_url: $('baseUrl').value.trim(), model: $('modelName').value.trim() });
-  function busy(value) {
-    $('planButton').disabled = value;
-    $('chatButton').disabled = value;
-    if (value) $('status').textContent = 'Running… live sources may take a little while.';
-  }
-  async function send(path, body) {
-    busy(true);
-    try {
-      const response = await fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail ? JSON.stringify(data.detail) : JSON.stringify(data));
-      const plannerResult = path === '/chat' ? data.result : data;
-      $('result').textContent = plannerResult.report_markdown || JSON.stringify(plannerResult, null, 2);
-      $('status').textContent = `Finished with status: ${plannerResult.status}.`;
-    } catch (error) { $('status').textContent = 'Request failed.'; $('result').textContent = String(error); }
-    finally { busy(false); }
-  }
-  $('planButton').onclick = async () => send('/plan', { profile: profile(), dars_text: $('darsText').value || null, dars_pdf_base64: await pdfBase64() });
-  $('chatButton').onclick = async () => {
-    const message = $('conversation').value.trim();
-    if (!message) { $('status').textContent = 'Enter a conversational message first.'; return; }
-    send('/chat', { conversation: [{role: 'user', content: message}], model: model(), dars_text: $('darsText').value || null, dars_pdf_base64: await pdfBase64() });
-  };
-</script>
+<script src="/app/app.js" defer></script>
 </body>
 </html>

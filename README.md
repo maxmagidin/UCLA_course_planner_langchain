@@ -59,17 +59,30 @@ pip install -r requirements.txt
 
 Python 3.10 or newer is required.
 
-## Test it now in the browser
+## Optional browser runner
+
+The browser is a lightweight way to exercise the workflow; it is not required
+to run or integrate the planner. The HTTP API, CLI, and Python entrypoint use
+the same graph without a frontend.
 
 ```bash
 source .venv/bin/activate
 uvicorn course_planner.api:app --host 127.0.0.1 --port 8765 --reload
 ```
 
-Open <http://localhost:8765/app/>. The form is prefilled with three Fall 2026
-Computer Science courses that currently produce valid schedule candidates.
-Click **Run direct plan**; no model key is needed. The planner uses the live
-UCLA Schedule of Classes, so this path requires internet access.
+Open <http://localhost:8765/app/>. The primary flow is:
+
+1. Upload a DARS PDF or paste its text. `/dars/parse` extracts course codes and
+   strongly labelled profile fields locally; review them before continuing.
+2. Fill in the planning details DARS does not contain, such as the target term,
+   required courses, and schedule constraints.
+3. Click **Run planner**. No model key is needed. The planner uses the live UCLA
+   Schedule of Classes, so this step requires internet access.
+
+For a quick smoke test, click **Use test example** and then **Run planner**.
+The collapsed **Optional: autofill with your own model** section is the BYOK
+path. The key is sent only with that `/intake` request, represented as a secret,
+and is not written to planner state, reports, checkpoints, or browser storage.
 
 To exercise the CLI with the same profile:
 

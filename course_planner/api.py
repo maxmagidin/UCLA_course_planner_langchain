@@ -16,7 +16,11 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from course_planner.documents import extract_course_codes, extract_text_from_pdf_base64
+from course_planner.documents import (
+    extract_course_codes,
+    extract_dars_hints,
+    extract_text_from_pdf_base64,
+)
 from course_planner.graph import run_planner
 from course_planner.intake import extract_profile
 from course_planner.planner_models import ModelConfig, PlannerResult, StudentProfile
@@ -44,7 +48,19 @@ class PlanRequest(BaseModel):
     dars_pdf_base64: str | None = Field(default=None, max_length=30_000_000)
 
 
-app = FastAPI(title="UCLA Course Planner", version="0.2.0")
+class DarsParseRequest(BaseModel):
+    dars_text: str | None = Field(default=None, max_length=2_000_000)
+    dars_pdf_base64: str | None = Field(default=None, max_length=30_000_000)
+
+
+class DarsParseResponse(BaseModel):
+    source: Literal["text", "pdf"]
+    character_count: int
+    course_codes: list[str]
+    profile_hints: dict[str, str | float]
+
+
+app = FastAPI(title="UCLA Course Planner", version="0.3.0")
 _frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
 app.mount("/app", StaticFiles(directory=_frontend_dir, html=True), name="app")
 
@@ -59,26 +75,64 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/dars/parse", response_model=DarsParseResponse)
+async def parse_dars(request: DarsParseRequest) -> DarsParseResponse:
+    text = await asyncio.to_thread(
+        _document_text, request.dars_text, request.dars_pdf_base64
+    )
+    if not text or not text.strip():
+        raise HTTPException(status_code=400, detail="Paste DARS text or upload a readable DARS PDF")
+    return DarsParseResponse(
+        source="pdf" if request.dars_pdf_base64 else "text",
+        character_count=len(text),
+        course_codes=extract_course_codes(text),
+        profile_hints=extract_dars_hints(text),
+    )
+
+
 @app.post("/intake", response_model=StudentProfile)
 async def intake(request: IntakeRequest) -> StudentProfile:
-    conversation = _add_document_context(request)
-    profile = await asyncio.to_thread(extract_profile, conversation, request.model)
-    return _apply_dars(profile, request.dars_text, request.dars_pdf_base64)
+    conversation = await asyncio.to_thread(_add_document_context, request)
+    profile = await _extract_profile_with_provider(conversation, request.model)
+    return await asyncio.to_thread(
+        _apply_dars, profile, request.dars_text, request.dars_pdf_base64
+    )
 
 
 @app.post("/plan", response_model=PlannerResult)
 async def plan(request: PlanRequest) -> PlannerResult:
-    profile = _apply_dars(request.profile, request.dars_text, request.dars_pdf_base64)
+    profile = await asyncio.to_thread(
+        _apply_dars, request.profile, request.dars_text, request.dars_pdf_base64
+    )
     return await asyncio.to_thread(run_planner, profile)
 
 
 @app.post("/chat", response_model=dict[str, Any])
 async def chat(request: ChatRequest) -> dict[str, Any]:
-    conversation = _add_document_context(request)
-    profile = await asyncio.to_thread(extract_profile, conversation, request.model)
-    profile = _apply_dars(profile, request.dars_text, request.dars_pdf_base64)
+    conversation = await asyncio.to_thread(_add_document_context, request)
+    profile = await _extract_profile_with_provider(conversation, request.model)
+    profile = await asyncio.to_thread(
+        _apply_dars, profile, request.dars_text, request.dars_pdf_base64
+    )
     result = await asyncio.to_thread(run_planner, profile)
     return {"profile": profile.model_dump(mode="json"), "result": result.model_dump(mode="json")}
+
+
+async def _extract_profile_with_provider(
+    conversation: list[dict[str, str]], model: ModelConfig
+) -> StudentProfile:
+    try:
+        return await asyncio.to_thread(extract_profile, conversation, model)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Model-assisted intake failed. Check the API key, provider, "
+                "model name, and the details you supplied."
+            ),
+        ) from exc
 
 
 def _add_document_context(request: ChatRequest) -> list[dict[str, str]]:
