@@ -10,28 +10,36 @@ def _clamp(value: float) -> float:
 
 
 def rank_schedules(candidates: list[ScheduleCandidate], profile: StudentProfile) -> list[ScheduleCandidate]:
-    weights = [
-        profile.weight_enrollment_chance,
-        profile.weight_professor_rating,
-        profile.weight_avg_gpa,
-        profile.weight_schedule_quality,
-        profile.weight_workload,
-    ]
-    total = sum(weights)
-    weights = [value / total for value in weights] if total else [0.2] * 5
-
     for candidate in candidates:
-        enroll = _clamp(candidate.avg_enrollment_chance)
-        professor = _clamp((candidate.avg_bruinwalk_composite or 0.0) / 5.0)
-        gpa = _clamp((candidate.avg_gpa or 0.0) / 4.0)
-        schedule = _clamp(candidate.schedule_quality_score)
-        workload = _clamp(1.0 - (candidate.avg_workload_hours_per_week or 0.0) / 20.0)
-        candidate.composite_score = round(_clamp(sum(metric * weight for metric, weight in zip(
-            [enroll, professor, gpa, schedule, workload], weights
-        ))), 4)
+        metrics: list[tuple[float, float]] = [
+            (_clamp(candidate.avg_enrollment_chance), profile.weight_enrollment_chance),
+            (_clamp(candidate.schedule_quality_score), profile.weight_schedule_quality),
+        ]
+        if candidate.avg_bruinwalk_composite is not None:
+            metrics.append((
+                _clamp(candidate.avg_bruinwalk_composite / 5.0),
+                profile.weight_professor_rating,
+            ))
+        if candidate.avg_gpa is not None:
+            metrics.append((_clamp(candidate.avg_gpa / 4.0), profile.weight_avg_gpa))
+        if candidate.avg_workload_hours_per_week is not None:
+            metrics.append((
+                _clamp(1.0 - candidate.avg_workload_hours_per_week / 20.0),
+                profile.weight_workload,
+            ))
+
+        # Missing evidence is omitted, not treated as a zero or (for workload)
+        # accidentally rewarded as a perfect score.
+        total_weight = sum(weight for _, weight in metrics)
+        score = (
+            sum(metric * weight for metric, weight in metrics) / total_weight
+            if total_weight
+            else 0.0
+        )
+        candidate.composite_score = round(_clamp(score), 4)
         candidate.preference_match_score = _preference_match(candidate, profile)
 
-    candidates.sort(key=lambda item: (item.composite_score, item.preference_match_score), reverse=True)
+    candidates.sort(key=lambda item: (item.preference_match_score, item.composite_score), reverse=True)
     for index, candidate in enumerate(candidates, start=1):
         candidate.rank = index
     return candidates
@@ -41,6 +49,7 @@ def _preference_match(candidate: ScheduleCandidate, profile: StudentProfile) -> 
     selected = {item["course_code"].upper() for item in candidate.courses}
     required = {item.upper() for item in profile.required_courses}
     preferred = {item.upper() for item in profile.preferred_courses}
+    unrequested = selected - required - preferred
     score = 0.0
     if required.issubset(selected):
         score += 0.3
@@ -49,4 +58,7 @@ def _preference_match(candidate: ScheduleCandidate, profile: StudentProfile) -> 
         score += 0.2
     if not candidate.has_time_conflicts:
         score += 0.1
+    # Once the requested courses satisfy the unit range, do not let unrelated
+    # electives outrank them solely because one happens to have richer data.
+    score -= min(0.3, 0.05 * len(unrequested))
     return round(_clamp(score), 4)

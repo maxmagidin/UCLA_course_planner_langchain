@@ -76,11 +76,13 @@ _DAY_CHARS = {"M": "Monday", "T": "Tuesday", "W": "Wednesday",
 def _parse_minutes(t: str) -> int | None:
     """Parse '10:00am', '2:30pm', '14:00', '10:00' -> minutes from midnight."""
     t = t.strip().lower().replace(".", "")
-    m = re.match(r"(\d{1,2}):(\d{2})\s*(am|pm)?", t)
+    m = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", t)
     if not m:
         return None
-    h, mi = int(m.group(1)), int(m.group(2))
+    h, mi = int(m.group(1)), int(m.group(2) or 0)
     ampm = m.group(3)
+    if h > 23 or mi > 59 or (ampm and not 1 <= h <= 12):
+        return None
     if ampm == "pm" and h != 12:
         h += 12
     elif ampm == "am" and h == 12:
@@ -177,10 +179,9 @@ def _group_sections(course: CourseOption) -> list[list[Section]]:
     Returns a list of options; each option is a list of 1-2 Sections
     (lecture, and optionally its discussion/lab).
     If there are only lectures, each is its own option.
-    If there are discussions/labs, pair each with every lecture
-    (UCLA typically lets you pick any discussion under any lecture,
-    but some courses restrict — we pair all combos and rely on
-    conflict filtering to prune).
+    If the source supplies a parent lecture, pair discussions/labs only with
+    that lecture. Legacy data without parent information retains the earlier
+    all-pairs behavior.
     """
     lectures: list[Section] = []
     discussions: list[Section] = []
@@ -199,10 +200,13 @@ def _group_sections(course: CourseOption) -> list[list[Section]]:
     if not discussions:
         return [[lec] for lec in lectures]
 
-    # Pair each lecture with each discussion/lab
+    # Pair each lecture with its own discussions/labs when UCLA exposes the
+    # hierarchy. Fall back to all discussions for older fixture/data shapes.
     options: list[list[Section]] = []
     for lec in lectures:
-        for dis in discussions:
+        linked = [dis for dis in discussions if dis.parent_section_id == lec.section_id]
+        candidates = linked or [dis for dis in discussions if not dis.parent_section_id]
+        for dis in candidates:
             # Skip if the lecture and its own discussion conflict
             lb = _section_time_blocks(lec)
             db = _section_time_blocks(dis)
@@ -361,12 +365,19 @@ def _generate_schedules(
                 continue
 
             # Build DaySchedule objects
-            day_blocks: dict[str, list[tuple[int, int, str, str]]] = {}
+            day_blocks: dict[str, list[tuple[int, int, str, str, str, str]]] = {}
             for course, secs in section_pick:
                 for s in secs:
                     for day, start, end in _section_time_blocks(s):
                         day_blocks.setdefault(day, []).append(
-                            (start, end, course.course_code, s.section_id)
+                            (
+                                start,
+                                end,
+                                course.course_code,
+                                s.section_id,
+                                s.instructor,
+                                s.location,
+                            )
                         )
 
             day_schedules: list[DaySchedule] = []
@@ -378,11 +389,11 @@ def _generate_schedules(
                 sec_dicts = [
                     {"course_code": cc, "section_id": sid,
                      "start_min": s, "end_min": e,
-                     "instructor": "", "location": ""}
-                    for s, e, cc, sid in blks
+                     "instructor": instructor, "location": location}
+                    for s, e, cc, sid, instructor, location in blks
                 ]
 
-                total_min = sum(e - s for s, e, _, _ in blks)
+                total_min = sum(e - s for s, e, _, _, _, _ in blks)
                 gap = 0
                 for i in range(1, len(blks)):
                     g = blks[i][0] - blks[i - 1][1]

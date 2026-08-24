@@ -1,14 +1,15 @@
 """The durable UCLA planner workflow.
 
 The graph deliberately combines deterministic nodes with one optional LLM
-boundary.  Retrieval, constraint solving, and ranking are ordinary Python;
-the model is used for intake/clarification and human-readable explanations.
+intake boundary. Retrieval, constraint solving, ranking, and reporting are
+ordinary Python.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -21,21 +22,43 @@ from langgraph.graph import END, START, StateGraph
 from course_planner.planner_models import PlannerResult, StudentProfile
 from course_planner.ranking import rank_schedules
 from course_planner.reporting import build_report
-from course_planner.state import PlannerState, event, failure
-from course_planner.scrapers.bruinwalk_scraper import scrape_course_ratings, scrape_professor_ratings
+from course_planner.scheduling import generate_schedules
+from course_planner.scrapers.bruinwalk_scraper import (
+    scrape_course_ratings,
+    scrape_professor_ratings,
+)
 from course_planner.scrapers.grade_dist_scraper import load_grade_data
-from course_planner.scrapers.soc_scraper import scrape_historical_enrollment, scrape_quarter_courses
+from course_planner.scrapers.soc_scraper import (
+    scrape_historical_enrollment,
+    scrape_quarter_courses,
+)
+from course_planner.state import PlannerState, event, failure
 from course_planner.utils import (
     CourseOption,
     EnrollmentPrediction,
     ProfessorRatings,
     Section,
-    StudentProfile as LegacyProfile,
     deserialize,
-    serialize,
+)
+from course_planner.utils import (
+    StudentProfile as LegacyProfile,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _course_limit() -> int:
+    try:
+        return max(1, min(40, int(os.getenv("PLANNER_MAX_COURSES_PER_DEPARTMENT", "12"))))
+    except ValueError:
+        return 12
 
 
 def _legacy_profile(data: dict[str, Any]) -> LegacyProfile:
@@ -79,6 +102,10 @@ def _normalize_code(value: str) -> str:
     return " ".join(value.upper().split())
 
 
+def _instructor_surname(value: str) -> str:
+    return re.sub(r"[^A-Z]", "", value.upper().split(",", 1)[0])
+
+
 def _prerequisites(description: str) -> list[str]:
     """Conservative prerequisite extraction; ambiguity is not treated as met."""
     return [_normalize_code(match) for match in re.findall(r"\b[A-Z]{2,6}\s+\d{1,3}[A-Z]?\b", description.upper())]
@@ -114,6 +141,7 @@ def _build_course_options(raw_courses: list[dict[str, Any]], profile: StudentPro
                     end_time=str(item.get("end_time", "")),
                     location=str(item.get("location", "")),
                     instructor=str(item.get("instructor", "")),
+                    parent_section_id=str(item.get("parent_section_id", "")),
                     enrolled=int(item.get("enrolled", 0) or 0),
                     capacity=int(item.get("capacity", 0) or 0),
                     waitlist=int(item.get("waitlist", 0) or 0),
@@ -136,17 +164,55 @@ def retrieve_classes_node(state: PlannerState) -> dict[str, Any]:
         if not profile.term:
             return failure(node, "term is required; do not default to a stale quarter", False)
         raw: list[dict[str, Any]] = []
+        requested = profile.required_courses + profile.preferred_courses
         for department in _departments(profile):
-            raw.extend(scrape_quarter_courses(profile.term, department))
+            raw.extend(
+                scrape_quarter_courses(
+                    profile.term,
+                    department,
+                    course_codes=requested,
+                    max_courses=_course_limit(),
+                )
+            )
+        raw = list({
+            _normalize_code(str(item.get("course_code", ""))): item
+            for item in raw
+            if item.get("course_code")
+        }.values())
         courses = _build_course_options(raw, profile)
-        return {
+        evidence_status = "ok" if courses else "failed"
+        result: dict[str, Any] = {
             "courses": _as_dicts(courses),
-            "evidence": {"schedule_of_classes": {"source": "UCLA SOC", "fetched_at": datetime.now(timezone.utc).isoformat(), "status": "ok", "detail": f"{len(courses)} options"}},
+            "evidence": {"schedule_of_classes": {"source": "UCLA SOC", "fetched_at": datetime.now(timezone.utc).isoformat(), "status": evidence_status, "detail": f"{len(courses)} options with usable sections"}},
             **event(f"retrieve_classes: found {len(courses)} course options"),
         }
+        if not courses:
+            return {
+                **result,
+                **failure(node, f"UCLA returned no usable {profile.term} courses for the requested departments", False),
+            }
+
+        found = {_normalize_code(course.course_code) for course in courses}
+        missing_required = sorted({
+            _normalize_code(code) for code in profile.required_courses
+        } - found)
+        if missing_required:
+            return {
+                **result,
+                **failure(
+                    node,
+                    "Required courses not offered with usable sections: " + ", ".join(missing_required),
+                    False,
+                ),
+            }
+        return result
     except Exception as exc:
         logger.exception("Class retrieval failed")
-        return failure(node, str(exc))
+        return {
+            "courses": [],
+            "evidence": {"schedule_of_classes": {"source": "UCLA SOC", "fetched_at": datetime.now(timezone.utc).isoformat(), "status": "failed", "detail": str(exc)}},
+            **failure(node, str(exc), False),
+        }
 
 
 def enrollment_node(state: PlannerState) -> dict[str, Any]:
@@ -154,14 +220,19 @@ def enrollment_node(state: PlannerState) -> dict[str, Any]:
     try:
         profile = StudentProfile.model_validate(state["profile"])
         courses = _course_objects(state.get("courses", []))
+        historical_enabled = _env_flag("PLANNER_ENABLE_HISTORICAL_ENROLLMENT")
         for course in courses:
-            history = scrape_historical_enrollment(course.course_code)
+            history = scrape_historical_enrollment(course.course_code) if historical_enabled else []
             n = len(history)
             day1 = sum((row.get("enrollment_day_1", 0) / max(row.get("capacity", 1), 1)) for row in history) / n if n else 0.0
             day7 = sum((row.get("enrollment_day_7", 0) / max(row.get("capacity", 1), 1)) for row in history) / n if n else 0.0
             current = course.sections[0] if course.sections else None
             fill = (current.enrolled / current.capacity) if current and current.capacity else 0.0
-            base = max(0.0, min(1.0, 1.0 - day1)) if n else 0.8
+            base = (
+                max(0.0, min(1.0, 1.0 - day1))
+                if n
+                else max(0.02, min(1.0, 1.0 - fill)) if current and current.capacity else 0.5
+            )
             pass1 = base
             pass2 = max(0.0, min(1.0, base * 0.7))
             open_enrollment = max(0.0, min(1.0, base * 0.45))
@@ -180,7 +251,12 @@ def enrollment_node(state: PlannerState) -> dict[str, Any]:
                 chance_open_enrollment=open_enrollment,
                 notes=f"Based on {n} historical observations and current fill of {fill:.0%}.",
             )
-        return {"enrollment_courses": _as_dicts(courses), "evidence": {"enrollment": {"source": "UCLA SOC historical data", "fetched_at": datetime.now(timezone.utc).isoformat(), "status": "ok", "detail": "historical fill-rate heuristic"}}, **event("enrollment: enrichment complete")}
+        detail = (
+            "historical fill-rate heuristic plus current enrollment"
+            if historical_enabled
+            else "current enrollment snapshot; historical lookups disabled for quick local runs"
+        )
+        return {"enrollment_courses": _as_dicts(courses), "evidence": {"enrollment": {"source": "UCLA SOC enrollment", "fetched_at": datetime.now(timezone.utc).isoformat(), "status": "ok", "detail": detail}}, **event("enrollment: enrichment complete")}
     except Exception as exc:
         logger.exception("Enrollment enrichment failed")
         return {"enrollment_courses": state.get("courses", []), **failure(node, str(exc))}
@@ -190,6 +266,12 @@ def ratings_node(state: PlannerState) -> dict[str, Any]:
     node = "ratings"
     try:
         courses = _course_objects(state.get("courses", []))
+        if not _env_flag("PLANNER_ENABLE_BRUINWALK"):
+            return {
+                "ratings_courses": _as_dicts(courses),
+                "evidence": {"bruinwalk": {"source": "Bruinwalk", "fetched_at": datetime.now(timezone.utc).isoformat(), "status": "partial", "detail": "disabled for quick local runs; set PLANNER_ENABLE_BRUINWALK=true to enable"}},
+                **event("ratings: skipped in quick local mode"),
+            }
         for course in courses:
             course.course_ratings = scrape_course_ratings(course.course_code)
             ratings: dict[str, ProfessorRatings] = {}
@@ -224,14 +306,30 @@ def ratings_node(state: PlannerState) -> dict[str, Any]:
 def grades_node(state: PlannerState) -> dict[str, Any]:
     node = "grades"
     try:
-        data = load_grade_data()
         courses = _course_objects(state.get("courses", []))
+        if not _env_flag("PLANNER_ENABLE_GRADES", default=True):
+            return {
+                "grade_courses": _as_dicts(courses),
+                "evidence": {"grades": {"source": "UCLA grade distributions", "fetched_at": datetime.now(timezone.utc).isoformat(), "status": "partial", "detail": "disabled by PLANNER_ENABLE_GRADES"}},
+                **event("grades: disabled"),
+            }
+        data = load_grade_data()
+        matched = 0
         for course in courses:
             records = data.get(_normalize_code(course.course_code), {})
             if records:
                 instructor = course.sections[0].instructor.strip() if course.sections else ""
-                course.grade_distribution = records.get(instructor) or next(iter(records.values()))
-        return {"grade_courses": _as_dicts(courses), "evidence": {"grades": {"source": "UCLA grade distributions", "fetched_at": datetime.now(timezone.utc).isoformat(), "status": "ok", "detail": "cached public sheets"}}, **event("grades: enrichment complete")}
+                surname = _instructor_surname(instructor)
+                course.grade_distribution = next(
+                    (
+                        distribution
+                        for record_instructor, distribution in records.items()
+                        if surname and _instructor_surname(record_instructor) == surname
+                    ),
+                    None,
+                )
+                matched += int(course.grade_distribution is not None)
+        return {"grade_courses": _as_dicts(courses), "evidence": {"grades": {"source": "UCLA grade distributions", "fetched_at": datetime.now(timezone.utc).isoformat(), "status": "ok", "detail": f"cached public sheets; matched {matched} of {len(courses)} current instructors"}}, **event("grades: enrichment complete")}
     except Exception as exc:
         logger.exception("Grade enrichment failed")
         return {"grade_courses": state.get("courses", []), **failure(node, str(exc))}
@@ -251,16 +349,16 @@ def merge_evidence_node(state: PlannerState) -> dict[str, Any]:
             if course.course_code.upper() in grades:
                 course.grade_distribution = grades[course.course_code.upper()].grade_distribution
         return {"courses": _as_dicts(merged), **event("merge_evidence: joined parallel branches")}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - graph nodes must return typed failures
         return failure("merge_evidence", str(exc))
 
 
 def schedule_node(state: PlannerState) -> dict[str, Any]:
     try:
-        from course_planner.agents.schedule_agent import _generate_schedules
-
+        if any(not error.get("recoverable", True) for error in state.get("errors", [])):
+            return {"candidates": [], **event("schedule: skipped because retrieval had a blocking error")}
         profile = _legacy_profile(state["profile"])
-        candidates = _generate_schedules(_course_objects(state.get("courses", [])), profile)
+        candidates = generate_schedules(_course_objects(state.get("courses", [])), profile)
         candidates = rank_schedules(candidates, profile)
         return {"candidates": _as_dicts(candidates), **event(f"schedule: generated {len(candidates)} candidates")}
     except Exception as exc:
@@ -274,11 +372,8 @@ def report_node(state: PlannerState) -> dict[str, Any]:
         candidates = [deserialize(json.dumps(item), __import__("course_planner.utils", fromlist=["ScheduleCandidate"]).ScheduleCandidate) for item in state.get("candidates", [])]
         report = build_report(candidates, profile, state.get("evidence", {}), state.get("errors", []))
         return {"report_markdown": report, **event("report: completed")}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - graph nodes must return typed failures
         return failure("report", str(exc), False)
-
-
-_DEFAULT_CHECKPOINTER = InMemorySaver()
 
 
 def build_graph(*, checkpointer=None):
@@ -301,20 +396,27 @@ def build_graph(*, checkpointer=None):
     graph.add_edge("merge_evidence", "schedule")
     graph.add_edge("schedule", "report")
     graph.add_edge("report", END)
-    return graph.compile(checkpointer=checkpointer or _DEFAULT_CHECKPOINTER)
+    return graph.compile(checkpointer=checkpointer or InMemorySaver())
 
 
-def run_planner(profile: StudentProfile | dict[str, Any], *, thread_id: str | None = None, checkpointer=None) -> PlannerResult:
+def run_planner(
+    profile: StudentProfile | dict[str, Any],
+    *,
+    thread_id: str | None = None,
+    run_id: str | None = None,
+    checkpointer=None,
+) -> PlannerResult:
     """Run one planner thread and return a validated result."""
     parsed = profile if isinstance(profile, StudentProfile) else StudentProfile.model_validate(profile)
-    thread_id = thread_id or str(uuid4())
+    run_id = run_id or str(uuid4())
+    thread_id = thread_id or run_id
     state = build_graph(checkpointer=checkpointer).invoke(
-        {"run_id": thread_id, "thread_id": thread_id, "profile": parsed.model_dump(mode="json"), "errors": [], "events": []},
-        config={"configurable": {"thread_id": thread_id}},
+        {"run_id": run_id, "thread_id": thread_id, "profile": parsed.model_dump(mode="json"), "errors": [], "events": []},
+        config={"configurable": {"thread_id": thread_id, "checkpoint_ns": run_id}},
     )
     errors = [item for item in state.get("errors", []) if isinstance(item, dict)]
     return PlannerResult(
-        run_id=thread_id,
+        run_id=run_id,
         status="failed" if any(not item.get("recoverable", True) for item in errors) else ("partial" if errors else "completed"),
         report_markdown=state.get("report_markdown", ""),
         candidates=state.get("candidates", []),

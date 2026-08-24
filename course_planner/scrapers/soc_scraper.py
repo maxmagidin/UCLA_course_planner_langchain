@@ -6,6 +6,8 @@ served by internal JSON endpoints.  We hit those directly with httpx.
 
 from __future__ import annotations
 
+import html as html_lib
+import json
 import logging
 import re
 from typing import Any
@@ -16,9 +18,8 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://sa.ucla.edu/ro/public/soc"
-RESULTS_URL = f"{BASE_URL}/Results"
-SEARCH_URL = f"{RESULTS_URL}/GetCourseSummary"
-DETAIL_URL = f"{RESULTS_URL}/CourseTitlesView"
+RESULTS_URL = "https://sa.ucla.edu/ro/Public/SOC/Results"
+COURSE_SUMMARY_URL = f"{RESULTS_URL}/GetCourseSummary"
 
 # Mapping quarter strings to the term codes UCLA uses.
 # Pattern: year + quarter letter, e.g. "25F" for Fall 2025.
@@ -53,10 +54,11 @@ def _term_code(quarter: str) -> str:
 
 
 def _parse_time(raw: str) -> tuple[str, str]:
-    """Best-effort parse of a time range like '10:00am - 11:50am'."""
+    """Best-effort parse of UCLA time ranges such as ``12pm-1:50pm``."""
     raw = raw.strip()
-    m = re.match(
-        r"(\d{1,2}:\d{2}\s*[ap]m?)\s*[-–]\s*(\d{1,2}:\d{2}\s*[ap]m?)",
+    m = re.search(
+        r"(\d{1,2}(?::\d{2})?\s*[ap]m?)\s*[-–]\s*"
+        r"(\d{1,2}(?::\d{2})?\s*[ap]m?)",
         raw,
         re.IGNORECASE,
     )
@@ -65,94 +67,125 @@ def _parse_time(raw: str) -> tuple[str, str]:
     return raw, ""
 
 
-def _extract_sections_from_html(html: str) -> list[dict]:
-    """Parse the HTML fragment returned by the detail endpoint into
-    a list of raw section dicts."""
+def _element_text(element) -> str:
+    """Read normal and template-backed text nodes from UCLA HTML fragments."""
+    if element is None:
+        return ""
+    return " ".join(
+        str(value).strip() for value in element.find_all(string=True) if str(value).strip()
+    )
+
+
+def _course_models(html: str) -> dict[str, dict[str, Any]]:
+    """Extract the JSON models UCLA registers for expandable result rows."""
+    models: dict[str, dict[str, Any]] = {}
+    pattern = re.compile(r'AddToCourseData\("([^\"]+)",(\{.*?\})\)', re.DOTALL)
+    for path, encoded in pattern.findall(html):
+        try:
+            models[path] = json.loads(encoded)
+        except json.JSONDecodeError:
+            logger.debug("Could not decode UCLA course model for %s", path)
+    return models
+
+
+def _parse_course_titles(html: str, department: str) -> list[dict[str, Any]]:
+    """Parse the initial result page without issuing per-course requests."""
     soup = BeautifulSoup(html, "html.parser")
-    sections: list[dict] = []
+    models = _course_models(html)
+    courses: list[dict[str, Any]] = []
+    for row in soup.select("div.class-title[id]"):
+        path = str(row.get("id", ""))
+        model = models.get(path)
+        button = row.select_one("[id$='-title']")
+        label = str(button.string).strip() if button and button.string else _element_text(button)
+        if not model or " - " not in label:
+            continue
+        catalog, title = label.split(" - ", 1)
+        subject = str(model.get("SubjectAreaCode") or department).strip()
+        courses.append(
+            {
+                "course_code": " ".join(f"{subject} {catalog}".upper().split()),
+                "title": title.strip(),
+                "model": model,
+            }
+        )
+    return courses
 
-    rows = soup.select("div.class-info, tr.class_row, div.section-header")
-    if not rows:
-        rows = soup.find_all(["div", "tr"])
 
-    for row in rows:
-        text = row.get_text(" ", strip=True)
-        if not text:
+def _section_type(section_id: str) -> str:
+    lowered = section_id.lower()
+    if lowered.startswith(("dis", "lab", "tut")):
+        return "lab" if lowered.startswith("lab") else "discussion"
+    return "lecture"
+
+
+def _parse_section_rows(html: str, *, parent_section_id: str = "") -> list[dict[str, Any]]:
+    """Parse section rows returned by ``GetCourseSummary``."""
+    soup = BeautifulSoup(html, "html.parser")
+    sections: list[dict[str, Any]] = []
+    for row in soup.select(".data_row.class-info[id]"):
+        section_cell = row.select_one(".sectionColumn")
+        section_link = section_cell.select_one("a") if section_cell else None
+        section_id = _element_text(section_link)
+        if not section_id:
+            match = re.search(r"\b(?:Lec|Dis|Lab|Sem|Tut)\s*\w+", _element_text(section_cell), re.IGNORECASE)
+            section_id = match.group(0) if match else ""
+        if not section_id:
             continue
 
-        # Try to find section ID (e.g. "Lec 1", "Dis 1A")
-        sec_id_match = re.search(
-            r"(Lec|Dis|Lab|Sem|Tut)\s*\d*[A-Z]?", text, re.IGNORECASE
+        day_cell = row.select_one(".dayColumn")
+        day_button = day_cell.select_one("button") if day_cell else None
+        days = _element_text(day_button or day_cell)
+
+        time_text = _element_text(row.select_one(".timeColumn"))
+        start_time, end_time = _parse_time(time_text)
+        status_text = _element_text(row.select_one(".statusColumn"))
+        waitlist_text = _element_text(row.select_one(".waitlistColumn"))
+        enrolled_match = re.search(r"(\d+)\s+(?:of|/)\s+(\d+)\s+Enrolled", status_text, re.IGNORECASE)
+        if not enrolled_match:
+            enrolled_match = re.search(r"(\d+)\s*/\s*(\d+)", status_text)
+        waitlist_match = re.search(r"(\d+)\s+(?:of|/)\s+(\d+)\s+Taken", waitlist_text, re.IGNORECASE)
+        if not waitlist_match:
+            waitlist_match = re.search(r"(\d+)\s*/\s*(\d+)", waitlist_text)
+
+        location = _element_text(row.select_one(".locationColumn"))
+        instructor = _element_text(row.select_one(".instructorColumn"))
+        row_text = _element_text(row).lower()
+        section_format = "in-person"
+        if "online" in row_text or "remote" in row_text:
+            section_format = "online"
+        elif "hybrid" in row_text:
+            section_format = "hybrid"
+
+        units_match = re.search(r"\d+(?:\.\d+)?", _element_text(row.select_one(".unitsColumn")))
+        sections.append(
+            {
+                "section_id": section_id,
+                "parent_section_id": parent_section_id,
+                "days": days,
+                "start_time": start_time,
+                "end_time": end_time,
+                "location": location,
+                "instructor": instructor,
+                "enrolled": int(enrolled_match.group(1)) if enrolled_match else 0,
+                "capacity": int(enrolled_match.group(2)) if enrolled_match else 0,
+                "waitlist": int(waitlist_match.group(1)) if waitlist_match else 0,
+                "waitlist_capacity": int(waitlist_match.group(2)) if waitlist_match else 0,
+                "format": section_format,
+                "section_type": _section_type(section_id),
+                "units": float(units_match.group(0)) if units_match else None,
+                "_path": str(row.get("id", "")),
+            }
         )
-        sec_id = sec_id_match.group(0) if sec_id_match else ""
-
-        # Days pattern: M, T, W, R, F or combinations
-        days_match = re.search(r"\b([MTWRF]{1,5})\b", text)
-        days = days_match.group(1) if days_match else ""
-
-        # Time range
-        time_match = re.search(
-            r"(\d{1,2}:\d{2}\s*[ap]m?)\s*[-–]\s*(\d{1,2}:\d{2}\s*[ap]m?)",
-            text,
-            re.IGNORECASE,
-        )
-        start_time = time_match.group(1).strip() if time_match else ""
-        end_time = time_match.group(2).strip() if time_match else ""
-
-        # Location
-        loc_match = re.search(
-            r"((?:Boelter|Dodd|Haines|Moore|Young|Bunche|Broad|Franz|"
-            r"Rolfe|Kinsey|Kaplan|MS|PAB|Math\s*Sci|Pub\s*Aff)\s*\d*\w*)",
-            text,
-            re.IGNORECASE,
-        )
-        location = loc_match.group(0).strip() if loc_match else ""
-
-        # Enrolled / capacity  e.g. "175/180"
-        enroll_match = re.search(r"(\d+)\s*/\s*(\d+)", text)
-        enrolled = int(enroll_match.group(1)) if enroll_match else 0
-        capacity = int(enroll_match.group(2)) if enroll_match else 0
-
-        # Waitlist
-        wl_match = re.search(r"[Ww]aitlist\D*(\d+)\s*/\s*(\d+)", text)
-        waitlist = int(wl_match.group(1)) if wl_match else 0
-        waitlist_cap = int(wl_match.group(2)) if wl_match else 0
-
-        # Format
-        fmt = "in-person"
-        low = text.lower()
-        if "online" in low:
-            fmt = "online"
-        elif "hybrid" in low:
-            fmt = "hybrid"
-
-        # Instructor — heuristic: capitalized Name after time or at end
-        instructor = ""
-        inst_match = re.search(
-            r"(?:(?:\d{1,2}:\d{2}\s*[ap]m?)\s+)([A-Z][a-z]+(?:[\s,]+[A-Z][a-z]+)*)",
-            text,
-        )
-        if inst_match:
-            instructor = inst_match.group(1).strip()
-
-        if sec_id or days:
-            sections.append(
-                {
-                    "section_id": sec_id,
-                    "days": days,
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "location": location,
-                    "instructor": instructor,
-                    "enrolled": enrolled,
-                    "capacity": capacity,
-                    "waitlist": waitlist,
-                    "waitlist_capacity": waitlist_cap,
-                    "format": fmt,
-                }
-            )
-
     return sections
+
+
+def _extract_sections_from_html(html: str) -> list[dict]:
+    """Backward-compatible section-fragment parser used by legacy callers."""
+    return [
+        {key: value for key, value in section.items() if not key.startswith("_") and key != "units"}
+        for section in _parse_section_rows(html)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -174,37 +207,42 @@ def get_available_departments(quarter: str = "Fall 2025") -> list[str]:
             soup = BeautifulSoup(resp.text, "html.parser")
 
             depts: list[str] = []
-            # Try the subject-area <select> or <option> elements
+            # Older versions rendered ordinary <option> elements.
             for opt in soup.select("option"):
                 val = (opt.get("value") or "").strip()
                 label = opt.get_text(strip=True)
-                if val and label and val != "0":
+                if val and label and val != "0" and not re.fullmatch(r"\d{2}[FWS12]", val):
                     depts.append(label)
             if depts:
                 return depts
 
-            # Fallback: look for a JSON blob in the page source
-            import json as _json
-
-            for script in soup.find_all("script"):
-                txt = script.string or ""
-                if "subjectArea" in txt or "SubjectArea" in txt:
-                    start = txt.find("[")
-                    end = txt.rfind("]") + 1
-                    if start >= 0 and end > start:
-                        items = _json.loads(txt[start:end])
-                        return [
-                            item.get("label") or item.get("text") or str(item)
-                            for item in items
-                            if isinstance(item, dict)
-                        ]
+            # The current site passes an HTML-escaped JSON array to its
+            # autocomplete widget instead of rendering <option> elements.
+            match = re.search(
+                r"SearchPanelSetup\('(.+?)',\s*'select_filter_subject'",
+                resp.text,
+                re.DOTALL,
+            )
+            if match:
+                items = json.loads(html_lib.unescape(match.group(1)))
+                return [
+                    str(item.get("label") or item.get("text") or item.get("value", "")).strip()
+                    for item in items
+                    if isinstance(item, dict)
+                ]
     except Exception:
         logger.exception("Failed to fetch departments")
 
     return []
 
 
-def scrape_quarter_courses(quarter: str, department: str) -> list[dict]:
+def scrape_quarter_courses(
+    quarter: str,
+    department: str,
+    *,
+    course_codes: list[str] | None = None,
+    max_courses: int | None = None,
+) -> list[dict]:
     """Scrape course listings for *department* in *quarter* from UCLA SOC.
 
     Returns a list of dicts, each with keys:
@@ -216,82 +254,88 @@ def scrape_quarter_courses(quarter: str, department: str) -> list[dict]:
         enrolled, capacity, waitlist, waitlist_capacity, format
     """
     term = _term_code(quarter)
-    # Encode department for the query — UCLA uses "COM+SCI" style
-    subj = department.strip().upper().replace(" ", "+")
+    # Pass ordinary spaces and let httpx encode them. Passing a literal "+"
+    # causes httpx to send "%2B", which UCLA interprets as a different subject.
+    subj = " ".join(department.strip().upper().split())
 
     params: dict[str, Any] = {
         "t": term,
         "sBy": "subject",
         "subj": subj,
-        "crsidx": subj,
         "cls_no": "",
-        "btnIs498": "False",
+        "btnIsInIndex": "btn_inIndex",
     }
 
     courses: list[dict] = []
 
     try:
         with httpx.Client(headers=_HEADERS, timeout=30, follow_redirects=True) as client:
-            # Step 1: hit the search/results page
+            # The initial request establishes the ASP.NET session required by
+            # every expandable-course request that follows.
             resp = client.get(RESULTS_URL, params=params)
             resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
+            if "/error/" in str(resp.url).lower():
+                raise RuntimeError(f"UCLA SOC redirected the {subj} search to an error page")
 
-            # The results page returns HTML with course blocks.
-            # Each course is in a div/script block with a model attribute or
-            # embedded JSON. We look for course containers.
-            course_blocks = soup.select(
-                "div.class-title, h3.class-title, div[id^='course_']"
-            )
-            if not course_blocks:
-                # Fallback: try to parse the whole page as a list
-                course_blocks = soup.find_all(
-                    "div", class_=re.compile(r"class[-_]?block|primary[-_]?row", re.I)
-                )
+            title_rows = _parse_course_titles(resp.text, subj)
+            requested = {" ".join(code.upper().split()) for code in (course_codes or [])}
+            title_rows.sort(key=lambda item: (item["course_code"] not in requested, item["course_code"]))
+            if max_courses is not None and max_courses >= 0:
+                explicit = [item for item in title_rows if item["course_code"] in requested]
+                others = [item for item in title_rows if item["course_code"] not in requested]
+                title_rows = explicit + others[: max(0, max_courses - len(explicit))]
 
-            for block in course_blocks:
-                text = block.get_text(" ", strip=True)
+            for item in title_rows:
+                try:
+                    detail = _get_course_summary(client, item["model"], referer=str(resp.url))
+                    primary_sections = _parse_section_rows(detail)
+                    detail_models = _course_models(detail)
+                    sections = list(primary_sections)
 
-                # Course code + title, e.g. "COM SCI 31 - Introduction to CS I"
-                code_match = re.match(
-                    r"([A-Z\s]+\d+\w*)\s*[-–:]\s*(.+)", text
-                )
-                if not code_match:
-                    continue
+                    # Lectures with discussions/labs are another expandable
+                    # level. Preserve that parent relationship for the solver.
+                    for primary in primary_sections:
+                        child_model = detail_models.get(primary["_path"])
+                        if not child_model:
+                            continue
+                        child_html = _get_course_summary(client, child_model, referer=str(resp.url))
+                        sections.extend(
+                            _parse_section_rows(
+                                child_html,
+                                parent_section_id=str(primary["section_id"]),
+                            )
+                        )
 
-                code = code_match.group(1).strip()
-                title = code_match.group(2).strip()
-
-                # Units — look for e.g. "(4.0)" or "4 units"
-                units = 4.0
-                units_match = re.search(r"(\d+\.?\d*)\s*(?:units?|\()", text, re.I)
-                if units_match:
-                    units = float(units_match.group(1))
-
-                # Grab detail / section info from sibling or nested elements
-                parent = block.parent or block
-                section_html = str(parent)
-                sections = _extract_sections_from_html(section_html)
-
-                instructor = ""
-                if sections:
-                    instructor = sections[0].get("instructor", "")
-
-                courses.append(
-                    {
-                        "course_code": code,
-                        "title": title,
-                        "units": units,
-                        "instructor": instructor,
-                        "description": "",
-                        "sections": sections,
-                    }
-                )
-
-            # If the HTML parsing yielded nothing (dynamic page), try the
-            # internal JSON endpoint as a fallback.
-            if not courses:
-                courses = _try_json_api(client, term, subj)
+                    units = next(
+                        (float(section["units"]) for section in primary_sections if section.get("units") is not None),
+                        4.0,
+                    )
+                    cleaned_sections = [
+                        {
+                            key: value
+                            for key, value in section.items()
+                            if not key.startswith("_") and key != "units"
+                        }
+                        for section in sections
+                    ]
+                    if not cleaned_sections:
+                        continue
+                    courses.append(
+                        {
+                            "course_code": item["course_code"],
+                            "title": item["title"],
+                            "units": units,
+                            "instructor": cleaned_sections[0].get("instructor", ""),
+                            "description": "",
+                            "sections": cleaned_sections,
+                        }
+                    )
+                except Exception:
+                    logger.exception(
+                        "SOC detail scrape failed for %s / %s",
+                        quarter,
+                        item["course_code"],
+                    )
 
     except Exception:
         logger.exception("SOC scrape failed for %s / %s", quarter, department)
@@ -299,93 +343,25 @@ def scrape_quarter_courses(quarter: str, department: str) -> list[dict]:
     return courses
 
 
-def _try_json_api(
-    client: httpx.Client, term: str, subj: str
-) -> list[dict]:
-    """Attempt the internal XHR JSON endpoint used by the SOC SPA."""
-    params: dict[str, Any] = {
-        "search_by": "subject",
-        "model": (
-            f'{{"Term":"{term}","SubjectAreaName":"{subj}",'
-            f'"CatalogNumber":"","IsRoot":true,"SessionGroup":"%%","'
-            f'ClassNumber":"%%","FilterFlags":{{"Text":"","CRN":""}}}}'
-        ),
-        "FilterFlags": '{"Text":"","CRN":""}',
-        "_": "",
-    }
-    try:
-        resp = client.get(SEARCH_URL, params=params)
-        resp.raise_for_status()
-        data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
-    except Exception:
-        # Response might be HTML, try parsing it
-        try:
-            return _parse_course_list_html(resp.text)
-        except Exception:
-            return []
-
-    results: list[dict] = []
-    course_list = data if isinstance(data, list) else data.get("SearchResults", [])
-    for item in course_list:
-        code = item.get("SubjectAreaCode", "") + " " + item.get("CatalogNumber", "")
-        code = code.strip()
-        title = item.get("Title", item.get("CourseTitle", ""))
-        units = float(item.get("Units", 4))
-        sections_raw = item.get("Sections", item.get("ClassSections", []))
-        sections: list[dict] = []
-        for sec in sections_raw:
-            days = sec.get("Days", "")
-            start = sec.get("StartTime", sec.get("BeginTime", ""))
-            end = sec.get("EndTime", "")
-            sections.append(
-                {
-                    "section_id": sec.get("SectionNumber", sec.get("ClassNumber", "")),
-                    "days": days,
-                    "start_time": start,
-                    "end_time": end,
-                    "location": sec.get("Location", sec.get("Building", "")),
-                    "instructor": sec.get("Instructor", sec.get("InstructorName", "")),
-                    "enrolled": int(sec.get("EnrolledCount", sec.get("Enrolled", 0))),
-                    "capacity": int(sec.get("Capacity", sec.get("EnrollCapacity", 0))),
-                    "waitlist": int(sec.get("WaitlistCount", sec.get("Waitlisted", 0))),
-                    "waitlist_capacity": int(sec.get("WaitlistCapacity", 0)),
-                    "format": sec.get("Format", "in-person").lower(),
-                }
-            )
-        results.append(
-            {
-                "course_code": code,
-                "title": title,
-                "units": units,
-                "instructor": sections[0]["instructor"] if sections else "",
-                "description": item.get("Description", ""),
-                "sections": sections,
-            }
-        )
-    return results
-
-
-def _parse_course_list_html(html: str) -> list[dict]:
-    """Last-resort parser for HTML-formatted search results."""
-    soup = BeautifulSoup(html, "html.parser")
-    courses: list[dict] = []
-
-    # Look for any element that contains a course code pattern
-    for el in soup.find_all(string=re.compile(r"[A-Z]{2,}\s+\d{1,4}")):
-        text = el.strip()
-        m = re.match(r"([A-Z\s]+\d+\w*)\s*[-–:]?\s*(.*)", text)
-        if m:
-            courses.append(
-                {
-                    "course_code": m.group(1).strip(),
-                    "title": m.group(2).strip(),
-                    "units": 4.0,
-                    "instructor": "",
-                    "description": "",
-                    "sections": [],
-                }
-            )
-    return courses
+def _get_course_summary(
+    client: httpx.Client,
+    model: dict[str, Any],
+    *,
+    referer: str,
+) -> str:
+    response = client.get(
+        COURSE_SUMMARY_URL,
+        params={
+            "model": json.dumps(model, separators=(",", ":")),
+            "FilterFlags": "{}",
+            "IsMultiListedTitles": "",
+        },
+        headers={"Referer": referer},
+    )
+    response.raise_for_status()
+    if "/error/" in str(response.url).lower():
+        raise RuntimeError("UCLA SOC course detail request was redirected to an error page")
+    return response.text
 
 
 # ---------------------------------------------------------------------------
@@ -395,23 +371,23 @@ def _parse_course_list_html(html: str) -> list[dict]:
 ARCHIVE_URL = "https://registrar.ucla.edu/archives/schedule-of-classes-archive"
 
 # Generate the last 8 quarters going backwards from the current one.
-_QUARTER_SEQUENCE = ["Fall", "Spring", "Winter"]
+_QUARTER_SEQUENCE = ["Winter", "Spring", "Fall"]
 
 
 def _recent_quarters(n: int = 8) -> list[str]:
     """Return up to *n* recent quarter strings like 'Fall 2025'."""
     import datetime as _dt
 
-    now = _dt.date.today()
+    now = _dt.datetime.now(tz=_dt.timezone.utc).date()
     year = now.year
     # Determine current quarter index
     month = now.month
     if month <= 3:
-        qi = 2  # Winter
+        qi = 0  # Winter
     elif month <= 6:
         qi = 1  # Spring
     else:
-        qi = 0  # Fall
+        qi = 2  # Fall
 
     quarters: list[str] = []
     y, idx = year, qi
@@ -436,7 +412,7 @@ def scrape_historical_enrollment(course_code: str) -> list[dict]:
     quarters = _recent_quarters(8)
     # Normalize course code for URL matching
     code_norm = " ".join(course_code.upper().split())
-    dept = code_norm.rsplit(" ", 1)[0].replace(" ", "+") if " " in code_norm else code_norm
+    dept = code_norm.rsplit(" ", 1)[0] if " " in code_norm else code_norm
 
     results: list[dict] = []
 
@@ -512,7 +488,7 @@ def scrape_historical_enrollment(course_code: str) -> list[dict]:
                         }
                     )
 
-        except Exception:
+        except Exception:  # noqa: BLE001 - one unavailable archive quarter is non-fatal
             logger.debug("Historical scrape failed for %s / %s", course_code, qtr)
             continue
 

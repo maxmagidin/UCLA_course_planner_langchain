@@ -9,24 +9,29 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from course_planner.documents import extract_course_codes, extract_text_from_pdf_base64
 from course_planner.graph import run_planner
 from course_planner.intake import extract_profile
-from course_planner.documents import extract_course_codes, extract_text_from_pdf_base64
 from course_planner.planner_models import ModelConfig, PlannerResult, StudentProfile
 
 
+class ConversationMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=50_000)
+
+
 class ChatRequest(BaseModel):
-    conversation: list[dict[str, str]] = Field(min_length=1)
+    conversation: list[ConversationMessage] = Field(min_length=1, max_length=100)
     model: ModelConfig
-    dars_text: str | None = None
-    dars_pdf_base64: str | None = None
+    dars_text: str | None = Field(default=None, max_length=2_000_000)
+    dars_pdf_base64: str | None = Field(default=None, max_length=30_000_000)
 
 
 class IntakeRequest(ChatRequest):
@@ -35,8 +40,8 @@ class IntakeRequest(ChatRequest):
 
 class PlanRequest(BaseModel):
     profile: StudentProfile
-    dars_text: str | None = None
-    dars_pdf_base64: str | None = None
+    dars_text: str | None = Field(default=None, max_length=2_000_000)
+    dars_pdf_base64: str | None = Field(default=None, max_length=30_000_000)
 
 
 app = FastAPI(title="UCLA Course Planner", version="0.2.0")
@@ -77,7 +82,7 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
 
 
 def _add_document_context(request: ChatRequest) -> list[dict[str, str]]:
-    conversation = list(request.conversation)
+    conversation = [item.model_dump() for item in request.conversation]
     text = _document_text(request.dars_text, request.dars_pdf_base64)
     if text:
         codes = extract_course_codes(text)
@@ -90,7 +95,10 @@ def _add_document_context(request: ChatRequest) -> list[dict[str, str]]:
 
 def _document_text(dars_text: str | None, dars_pdf_base64: str | None) -> str | None:
     if dars_pdf_base64:
-        return extract_text_from_pdf_base64(dars_pdf_base64)
+        try:
+            return extract_text_from_pdf_base64(dars_pdf_base64)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not read DARS PDF: {exc}") from exc
     return dars_text
 
 

@@ -1,0 +1,17 @@
+{
+  "name": "Alex Student",
+  "major": "Computer Science",
+  "year": "junior",
+  "gpa": 3.6,
+  "units_completed": 96,
+  "enrollment_pass": "pass_1",
+  "pass_open_datetime": "2026-08-28 09:00",
+  "term": "Fall 2026",
+  "dars_courses": [],
+  "required_courses": ["COM SCI 31", "COM SCI 32", "COM SCI 111"],
+  "preferred_courses": [],
+  "hard_constraints": [],
+  "format_preference": "any",
+  "min_units": 12,
+  "max_units": 16
+}

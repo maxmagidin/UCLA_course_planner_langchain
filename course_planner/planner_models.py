@@ -36,7 +36,7 @@ class StudentProfile(BaseModel):
     units_completed: float = Field(default=0.0, ge=0.0)
     enrollment_pass: EnrollmentPass = EnrollmentPass.OPEN
     pass_open_datetime: str = ""
-    term: str = ""
+    term: str = Field(min_length=1)
     dars_text: str | None = None
     dars_courses: list[str] = Field(default_factory=list)
     required_courses: list[str] = Field(default_factory=list)
@@ -72,7 +72,7 @@ class ModelConfig(BaseModel):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 
     @classmethod
-    def from_environment(cls) -> "ModelConfig":
+    def from_environment(cls) -> ModelConfig:
         import os
 
         provider = os.getenv("MODEL_PROVIDER", "openai_compatible").lower().strip()

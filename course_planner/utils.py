@@ -4,7 +4,7 @@ import io
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Type, TypeVar
+from typing import TypeVar
 
 import dacite
 import pdfplumber
@@ -64,6 +64,7 @@ class Section:
     end_time: str
     location: str
     instructor: str
+    parent_section_id: str = ""
     enrolled: int = 0
     capacity: int = 0
     waitlist: int = 0
@@ -243,7 +244,7 @@ def serialize(obj) -> str:
     return json.dumps(dataclasses.asdict(obj), cls=_EnumEncoder)
 
 
-def deserialize(json_str: str, cls: Type[T]) -> T:
+def deserialize(json_str: str, cls: type[T]) -> T:
     """Reconstruct a dataclass from a JSON string.
 
     Uses ``dacite`` with ``cast=[Enum]`` so Enum fields are automatically

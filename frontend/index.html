@@ -54,7 +54,7 @@
       <label>Minimum units<input id="minUnits" type="number" min="0" value="12" /></label>
       <label>Maximum units<input id="maxUnits" type="number" min="0" value="16" /></label>
       <label>Format<select id="format"><option>any</option><option>in-person</option><option>hybrid</option><option>online</option></select></label>
-      <label>Required courses<input id="required" placeholder="COM SCI 111, MATH 33A" /></label>
+      <label>Required courses<input id="required" value="COM SCI 31, COM SCI 32, COM SCI 111" placeholder="COM SCI 111, MATH 33A" /></label>
       <label>Preferred courses<input id="preferred" placeholder="COM SCI 118" /></label>
       <label class="full">Hard constraints<textarea id="constraints" placeholder="Friday off; no classes before 10:00 am"></textarea></label>
     </div>
@@ -113,15 +113,20 @@
     });
   }
   const model = () => ({ provider: $('provider').value.trim(), api_key: $('apiKey').value, base_url: $('baseUrl').value.trim(), model: $('modelName').value.trim() });
-  function busy(value) { $('planButton').disabled = value; $('chatButton').disabled = value; $('status').textContent = value ? 'Running… live sources may take a little while.' : ''; }
+  function busy(value) {
+    $('planButton').disabled = value;
+    $('chatButton').disabled = value;
+    if (value) $('status').textContent = 'Running… live sources may take a little while.';
+  }
   async function send(path, body) {
     busy(true);
     try {
       const response = await fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail ? JSON.stringify(data.detail) : JSON.stringify(data));
-      $('result').textContent = path === '/chat' ? data.result.report_markdown : data.report_markdown;
-      $('status').textContent = 'Completed.';
+      const plannerResult = path === '/chat' ? data.result : data;
+      $('result').textContent = plannerResult.report_markdown || JSON.stringify(plannerResult, null, 2);
+      $('status').textContent = `Finished with status: ${plannerResult.status}.`;
     } catch (error) { $('status').textContent = 'Request failed.'; $('result').textContent = String(error); }
     finally { busy(false); }
   }

@@ -26,16 +26,37 @@ user / CLI / web API / Agent Chat Protocol
         evidence-first report
 ```
 
-The model is used for intake and explanation. Retrieval, prerequisite
-filtering, hard constraints, schedule generation, and ranking stay
-deterministic and testable.
+The model is used only for optional conversational intake. Retrieval,
+prerequisite filtering, hard constraints, schedule generation, ranking, and
+reporting stay deterministic and testable. Direct planning does not need an
+API key.
 
 ## Install
 
 ```bash
-python -m venv .venv
+python3.10 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+Python 3.10 or newer is required.
+
+## Test it now in the browser
+
+```bash
+source .venv/bin/activate
+uvicorn course_planner.api:app --reload
+```
+
+Open <http://127.0.0.1:8000>. The form is prefilled with three Fall 2026
+Computer Science courses that currently produce valid schedule candidates.
+Click **Run direct plan**; no model key is needed. The planner uses the live
+UCLA Schedule of Classes, so this path requires internet access.
+
+To exercise the CLI with the same profile:
+
+```bash
+python -m course_planner.agent examples/profile.json
 ```
 
 Set the model configuration in the environment; do not put API keys in source files:
@@ -91,7 +112,7 @@ not silently plan against an old quarter:
 }
 ```
 
-Then:
+Then (or use the checked-in `examples/profile.json`):
 
 ```bash
 python -m course_planner.agent profile.json
@@ -105,12 +126,6 @@ from course_planner.planner_models import StudentProfile
 
 result = run_planner(StudentProfile.model_validate(profile_dict))
 print(result.report_markdown)
-```
-
-For a web application, run the optional API:
-
-```bash
-uvicorn course_planner.api:app --reload
 ```
 
 The `/chat` endpoint accepts a conversation plus a transient `model` object:
@@ -138,15 +153,26 @@ keep the key only in the user's browser or server-side secret manager.
 - The HTTP `/chat` and `/intake` endpoints accept either `dars_text` or a
   base64-encoded `dars_pdf_base64`. The PDF is parsed locally and course codes
   are extracted deterministically before planning.
-- The planner currently reads live UCLA Schedule of Classes data, historical
-  enrollment, Bruinwalk ratings, and UCLA grade distributions.
+- The default local path reads live UCLA classes/current enrollment and public
+  UCLA grade distributions. It caps expansion at 12 courses per department so
+  a first run stays bounded.
+- Historical quarter lookups and Bruinwalk scraping are opt-in because those
+  sources add many slow requests and can require a local Playwright browser:
+
+  ```bash
+  export PLANNER_ENABLE_HISTORICAL_ENROLLMENT=true
+  export PLANNER_ENABLE_BRUINWALK=true
+  ```
+
+  `PLANNER_ENABLE_GRADES=false` skips grade-sheet loading, and
+  `PLANNER_MAX_COURSES_PER_DEPARTMENT=20` changes the default course cap.
 - A separate course-reader upload is not yet a first-class evidence source.
   It should be added as another typed retrieval tool and evidence record rather
   than silently mixing arbitrary PDF text into the model prompt.
 
-`run_planner` uses a LangGraph `InMemorySaver` by default. Replace it with a
-database-backed checkpointer for production so a user can change a constraint
-and resume from the last completed node.
+Each `run_planner` call uses an isolated LangGraph `InMemorySaver` by default.
+Pass a database-backed checkpointer plus stable `thread_id`/`run_id` values in
+production when a user must change a constraint and resume an existing run.
 
 ## External usage and optional ASI:One surface
 
@@ -175,11 +201,11 @@ graph and hard constraints.
 
 - `course_planner/agents/` is retained only as a compatibility reference. The
   new runtime does not launch those workers.
-- The schedule solver is reused temporarily from the legacy module while its
-  pure functions are being extracted into a standalone domain package.
+- The schedule solver now lives in the side-effect-free
+  `course_planner/scheduling.py` domain module. FastAPI and LangGraph do not
+  import or initialize legacy `uagents` workers.
 - The old runtime bugs were corrected in the compatibility files: the schedule
   message loop, the grade-distribution early return, the stale term, and the
   committed ASI key.
-- The next production step is a persistent checkpointer plus tests around
-  time parsing, prerequisite matching, schedule conflicts, and ranking
-  regressions.
+- The next production step is a persistent checkpointer plus broader
+  prerequisite-matching and ranking regression coverage.

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import course_planner.graph as graph_module
+from course_planner.documents import extract_course_codes
 from course_planner.graph import run_planner
 from course_planner.model_provider import create_chat_model
-from course_planner.documents import extract_course_codes
 from course_planner.planner_models import ModelConfig, StudentProfile
+from course_planner.ranking import rank_schedules
+from course_planner.utils import ScheduleCandidate
 
 
 def _profile() -> StudentProfile:
@@ -75,11 +77,15 @@ def test_graph_joins_parallel_enrichment(monkeypatch):
                 "section_type": "lecture",
             }],
         })
-    monkeypatch.setattr(graph_module, "scrape_quarter_courses", lambda term, department: raw)
+    monkeypatch.setattr(
+        graph_module,
+        "scrape_quarter_courses",
+        lambda term, department, **kwargs: raw,
+    )
     monkeypatch.setattr(graph_module, "scrape_historical_enrollment", lambda course_code: [])
     monkeypatch.setattr(graph_module, "scrape_course_ratings", lambda course_code: None)
     monkeypatch.setattr(graph_module, "scrape_professor_ratings", lambda instructor, course_code: None)
-    monkeypatch.setattr(graph_module, "load_grade_data", lambda: {})
+    monkeypatch.setattr(graph_module, "load_grade_data", dict)
 
     result = run_planner(_profile(), thread_id="test-join")
 
@@ -90,3 +96,66 @@ def test_graph_joins_parallel_enrichment(monkeypatch):
     assert "enrollment" in result.evidence
     assert "bruinwalk" in result.evidence
     assert "grades" in result.evidence
+
+
+def test_missing_required_courses_fail_instead_of_silently_planning(monkeypatch):
+    raw = [{
+        "course_code": "COM SCI 101",
+        "title": "Available course",
+        "units": 4,
+        "description": "",
+        "sections": [{
+            "section_id": "Lec 1", "days": "MWF", "start_time": "9am",
+            "end_time": "9:50am", "location": "", "instructor": "Professor",
+            "capacity": 100, "enrolled": 20, "format": "in-person",
+            "section_type": "lecture",
+        }],
+    }]
+    monkeypatch.setattr(
+        graph_module,
+        "scrape_quarter_courses",
+        lambda term, department, **kwargs: raw,
+    )
+    monkeypatch.setenv("PLANNER_ENABLE_GRADES", "false")
+
+    result = run_planner(_profile(), thread_id="test-missing-required")
+
+    assert result.status == "failed"
+    assert result.candidates == []
+    assert "COM SCI 102" in result.errors[0].message
+
+
+def test_ranking_renormalizes_around_missing_optional_evidence():
+    profile = graph_module._legacy_profile(_profile().model_dump(mode="json"))
+    candidate = ScheduleCandidate(
+        avg_enrollment_chance=0.5,
+        schedule_quality_score=0.5,
+        avg_bruinwalk_composite=None,
+        avg_gpa=None,
+        avg_workload_hours_per_week=None,
+    )
+
+    ranked = rank_schedules([candidate], profile)
+
+    assert ranked[0].composite_score == 0.5
+
+
+def test_ranking_prefers_requested_schedule_over_unrelated_elective():
+    profile = graph_module._legacy_profile(_profile().model_dump(mode="json"))
+    requested = [{"course_code": code} for code in profile.required_courses]
+    required_only = ScheduleCandidate(
+        courses=requested,
+        total_units=12,
+        avg_enrollment_chance=0.4,
+        schedule_quality_score=0.4,
+    )
+    with_unrelated_elective = ScheduleCandidate(
+        courses=requested + [{"course_code": "COM SCI 1"}],
+        total_units=13,
+        avg_enrollment_chance=0.9,
+        schedule_quality_score=0.9,
+    )
+
+    ranked = rank_schedules([with_unrelated_elective, required_only], profile)
+
+    assert ranked[0] is required_only
