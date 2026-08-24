@@ -1,158 +1,18 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>UCLA Course Planner</title>
-  <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="/app/styles.css" />
-</head>
-<body>
-<main class="shell">
-  <header class="hero">
-    <p class="eyebrow">UCLA Course Planner</p>
-    <h1>Upload your DARS.<br />Fill in the gaps. Run.</h1>
-    <p class="lede">The report is read locally by this app. No model key is required to build a schedule.</p>
-  </header>
-
-  <nav class="progress" aria-label="Planner steps">
-    <span><b>1</b> Read DARS</span>
-    <span><b>2</b> Planning details</span>
-    <span><b>3</b> Results</span>
-  </nav>
-
-  <section class="panel" id="darsStep">
-    <div class="section-heading">
-      <span class="step-number">1</span>
-      <div>
-        <h2>Start with your DARS</h2>
-        <p>Upload the PDF and review the courses we find before they enter the planner.</p>
-      </div>
-    </div>
-
-    <label class="drop-zone" for="darsPdf">
-      <strong id="fileLabel">Choose a DARS PDF</strong>
-      <span>PDF up to 15 MB</span>
-      <input id="darsPdf" type="file" accept="application/pdf" />
-    </label>
-
-    <details class="paste-option">
-      <summary>Paste DARS text instead</summary>
-      <label for="darsText">DARS text</label>
-      <textarea id="darsText" placeholder="Paste the text from your degree audit"></textarea>
-    </details>
-
-    <div class="actions">
-      <button class="primary" id="parseButton">Read DARS</button>
-      <button class="quiet" id="skipButton">Continue without DARS</button>
-      <button class="quiet" id="exampleButton">Use test example</button>
-    </div>
-    <p class="status" id="parseStatus" role="status"></p>
-
-    <div class="review" id="darsReview" hidden>
-      <div class="review-summary">
-        <strong id="courseCount">0 course codes found</strong>
-        <span>Review this list—DARS layouts vary, so you can correct it.</span>
-      </div>
-      <label for="darsCourses">Completed or in-progress courses</label>
-      <textarea id="darsCourses" placeholder="COM SCI 31, MATH 31A"></textarea>
-    </div>
-  </section>
-
-  <section class="panel" id="detailsStep" hidden>
-    <div class="section-heading">
-      <span class="step-number">2</span>
-      <div>
-        <h2>Add what DARS does not know</h2>
-        <p>Tell the planner what you need next and the schedule constraints that matter.</p>
-      </div>
-    </div>
-
-    <div class="form-grid">
-      <label>Name<input id="name" autocomplete="name" placeholder="Alex Student" /></label>
-      <label>Major<input id="major" placeholder="Computer Science" /></label>
-      <label>Term<input id="term" placeholder="Fall 2026" value="Fall 2026" /></label>
-      <label>Class level
-        <select id="year">
-          <option>freshman</option><option>sophomore</option><option selected>junior</option>
-          <option>senior</option><option>graduate</option>
-        </select>
-      </label>
-      <label class="wide">Courses you need
-        <input id="required" placeholder="COM SCI 111, COM SCI 118" />
-        <span class="hint">At least one course is required.</span>
-      </label>
-      <label class="wide">Courses you would like, if possible
-        <input id="preferred" placeholder="MATH 115A" />
-      </label>
-      <label>GPA<input id="gpa" type="number" min="0" max="4" step=".01" value="0" /></label>
-      <label>Units completed<input id="units" type="number" min="0" step="1" value="0" /></label>
-      <label>Enrollment pass
-        <select id="pass">
-          <option value="pass_1">Pass 1</option>
-          <option value="pass_2">Pass 2</option>
-          <option value="open" selected>Open enrollment</option>
-        </select>
-      </label>
-      <label>Pass opens<input id="passOpen" placeholder="2026-08-28 09:00" /></label>
-      <label>Minimum units<input id="minUnits" type="number" min="0" value="12" /></label>
-      <label>Maximum units<input id="maxUnits" type="number" min="0" value="16" /></label>
-      <label>Format
-        <select id="format">
-          <option>any</option><option>in-person</option><option>hybrid</option><option>online</option>
-        </select>
-      </label>
-      <label class="wide">Schedule constraints
-        <textarea id="constraints" placeholder="Friday off; no classes before 10:00 am"></textarea>
-      </label>
-    </div>
-
-    <details class="byok" id="byokPanel">
-      <summary>
-        <span><strong>Optional: autofill with your own model</strong><small>Bring your own key; it is used for one request and is not stored.</small></span>
-      </summary>
-      <div class="byok-body">
-        <label class="wide">Describe the remaining details in plain English
-          <textarea id="byokMessage" placeholder="I am a junior CS major with a 3.6 GPA. I need COM SCI 111 and want Fridays off..."></textarea>
-        </label>
-        <div class="form-grid compact">
-          <label>Provider
-            <select id="providerPreset">
-              <option value="openai">OpenAI</option>
-              <option value="openrouter">OpenRouter</option>
-              <option value="asi_one">ASI:One</option>
-              <option value="custom">Other OpenAI-compatible</option>
-            </select>
-          </label>
-          <label>API key<input id="apiKey" type="password" autocomplete="off" placeholder="Used only for autofill" /></label>
-          <label>Model<input id="modelName" value="gpt-4o-mini" /></label>
-          <label id="baseUrlField" hidden>Base URL<input id="baseUrl" /></label>
-        </div>
-        <div class="actions"><button class="secondary" id="autofillButton">Autofill planning details</button></div>
-        <p class="status" id="autofillStatus" role="status"></p>
-      </div>
-    </details>
-
-    <div class="run-bar">
-      <div><strong>Ready when you are.</strong><span>Planning uses live UCLA course data and can take a few seconds.</span></div>
-      <button class="primary" id="planButton">Run planner</button>
-    </div>
-    <p class="status" id="planStatus" role="status"></p>
-  </section>
-
-  <section class="panel result-panel" id="resultStep" hidden>
-    <div class="section-heading">
-      <span class="step-number success">3</span>
-      <div><h2>Your schedule</h2><p id="resultSummary"></p></div>
-    </div>
-    <pre id="result"></pre>
-  </section>
-
-  <footer>
-    This browser is only a lightweight runner. The same planner works without a frontend through the
-    <a href="/docs">HTTP API</a>, CLI, or Python entrypoint.
-  </footer>
-</main>
-<script src="/app/app.js" defer></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Build a quarter or academic-year UCLA course plan from a DARS audit."
+    />
+    <meta name="theme-color" content="#0b3d6e" />
+    <link rel="icon" href="data:," />
+    <title>UCLA Course Planner</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

@@ -1,0 +1,136 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Avenir Next", Avenir, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --color-ucla-blue: #2774ae;
+  --color-ucla-blue-dark: #0b3d6e;
+  --color-ucla-blue-soft: #eaf5fc;
+  --color-ucla-gold: #ffd100;
+  --color-ucla-gold-dark: #f2b900;
+  --color-page: #f5f7fa;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: #f5f7fa;
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@keyframes accordion-down {
+  from { height: 0; opacity: 0; }
+  to { height: var(--radix-accordion-content-height); opacity: 1; }
+}
+
+@keyframes accordion-up {
+  from { height: var(--radix-accordion-content-height); opacity: 1; }
+  to { height: 0; opacity: 0; }
+}
+
+.animate-accordion-down {
+  animation: accordion-down 180ms ease-out;
+}
+
+.animate-accordion-up {
+  animation: accordion-up 160ms ease-in;
+}
+
+.report-markdown {
+  min-width: 0;
+  color: #334155;
+  font-size: 0.875rem;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.report-markdown h1,
+.report-markdown h2,
+.report-markdown h3 {
+  margin: 1.5rem 0 0.65rem;
+  color: #0f172a;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.report-markdown h1:first-child {
+  margin-top: 0;
+  font-size: 1.35rem;
+}
+
+.report-markdown h2 {
+  font-size: 1.1rem;
+}
+
+.report-markdown p,
+.report-markdown ul {
+  margin: 0.65rem 0;
+}
+
+.report-markdown ul {
+  padding-left: 1.25rem;
+  list-style: disc;
+}
+
+.report-markdown strong {
+  color: #1e293b;
+}
+
+.report-markdown table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: 1rem 0;
+  border-collapse: collapse;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.report-markdown th,
+.report-markdown td {
+  border: 1px solid #e2e8f0;
+  padding: 0.55rem 0.7rem;
+  text-align: left;
+}
+
+.report-markdown th {
+  background: #f8fafc;
+  color: #334155;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

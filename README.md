@@ -1,5 +1,7 @@
 # UCLA Course Planner — LangChain / LangGraph
 
+[![CI](https://github.com/maxmagidin/UCLA_course_planner_langchain/actions/workflows/ci.yml/badge.svg?branch=langchain-migration)](https://github.com/maxmagidin/UCLA_course_planner_langchain/actions/workflows/ci.yml)
+
 > [!WARNING]
 > **Work in progress.** This project is being actively rebuilt and extended. It
 > was reworked from the original ASI:One/Agentverse course-planning project to
@@ -56,40 +58,81 @@ prerequisite filtering, hard constraints, schedule generation, ranking, and
 reporting stay deterministic and testable. Direct planning does not need an
 API key.
 
-## Install
+## Fork and run it
+
+The repository contains both the FastAPI/LangGraph backend and the complete
+Vite frontend. A fork does not need a hosted service or a project-owned model
+key. Install Python 3.10+ and Node 22+, then run:
 
 ```bash
-python3.10 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+git clone -b langchain-migration https://github.com/maxmagidin/UCLA_course_planner_langchain.git
+cd UCLA_course_planner_langchain
+make setup
+make run
 ```
 
-Python 3.10 or newer is required.
+Open <http://127.0.0.1:8765/app/>. `make setup` creates `.venv`, installs the
+Python and npm dependencies, and builds the frontend. `make run` rebuilds the
+frontend and serves the entire application from FastAPI. The checked-in GitHub
+Actions workflow performs the same frontend build and backend test suite for
+pushes and pull requests.
 
-## Optional browser runner
-
-The browser is a lightweight way to exercise the workflow; it is not required
-to run or integrate the planner. The HTTP API, CLI, and Python entrypoint use
-the same graph without a frontend.
+To configure the pieces manually:
 
 ```bash
-source .venv/bin/activate
-uvicorn course_planner.api:app --host 127.0.0.1 --port 8765 --reload
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+npm ci --prefix frontend
+npm run build --prefix frontend
+.venv/bin/python -m uvicorn course_planner.api:app --host 127.0.0.1 --port 8765
 ```
 
-Open <http://localhost:8765/app/>. The primary flow is:
+## Browser workflow
 
-1. Upload a DARS PDF or paste its text. `/dars/parse` extracts course codes and
-   strongly labelled profile fields locally; review them before continuing.
-2. Fill in the planning details DARS does not contain, such as the target term,
-   required courses, and schedule constraints.
-3. Click **Run planner**. No model key is needed. The planner uses the live UCLA
-   Schedule of Classes, so this step requires internet access.
+The React application is a complete interface over the same public API used by
+the CLI and Python entrypoint:
 
-For a quick smoke test, click **Use test example** and then **Run planner**.
-The collapsed **Optional: autofill with your own model** section is the BYOK
-path. The key is sent only with that `/intake` request, represented as a secret,
-and is not written to planner state, reports, checkpoints, or browser storage.
+1. **DARS:** upload a PDF or paste text, then review the deterministically
+   extracted completed/in-progress courses.
+2. **Student:** confirm the profile fields DARS supplied and fill any gaps.
+   Model-assisted autofill is optional.
+3. **Plan:** choose one published quarter or an academic year. Assign required
+   and preferred courses to each term, select unit ranges, and add schedule and
+   ranking preferences.
+4. **Results:** compare section-level schedules, evidence freshness, partial
+   failures, and downloadable Markdown reports.
+
+In academic-year mode, the top schedule from each term is added to completed
+coursework before the next term runs. That provides real prerequisite
+continuity rather than three unrelated planner requests. Section-level results
+still depend on published UCLA Schedule of Classes data; unpublished future
+terms are clearly returned as partial or failed rather than fabricated.
+
+For frontend development, run the backend and Vite dev server in separate
+terminals. Vite proxies `/api` to FastAPI:
+
+```bash
+make backend       # http://127.0.0.1:8765
+make frontend-dev  # http://127.0.0.1:5173
+```
+
+The frontend uses Vite, React, TypeScript, Tailwind CSS, local shadcn-style
+components, Radix primitives, and Lucide icons. `frontend/components.json`
+keeps it compatible with the shadcn CLI, while the generated component source
+remains owned by this repository.
+
+## Bring your own key
+
+No key is needed for DARS parsing, retrieval, prerequisite checks, schedule
+generation, ranking, or reporting. The collapsed **Optional model autofill**
+panel accepts an OpenAI, OpenRouter, ASI:One, or custom OpenAI-compatible key
+only when a user wants natural-language intake.
+
+The key remains in React component memory and is sent only with the `/api/intake`
+request. It is represented as a Pydantic secret and is not written to planner
+state, reports, checkpoints, browser storage, or API responses. Fork owners can
+also configure a model through environment variables for CLI or server-owned
+flows:
 
 To exercise the CLI with the same profile:
 
@@ -119,6 +162,15 @@ export MODEL_NAME="asi1"
 
 This optional preset uses ASI:One only as the model API. It does not publish
 the migrated application to ASI:One or Agentverse.
+
+## Static hosting and GitHub Pages
+
+Vite can build the frontend for GitHub Pages, but Pages cannot run the Python
+backend. To publish a fully working browser demo, deploy FastAPI separately,
+set `VITE_API_BASE_URL` to that HTTPS API during the frontend build, set
+`VITE_BASE_PATH` to the repository path, and allow the Pages origin with the
+backend `FRONTEND_ORIGINS` environment variable. Never use a project-owned
+provider key in a public browser build; keep the existing BYOK request path.
 
 Optional LangSmith tracing:
 

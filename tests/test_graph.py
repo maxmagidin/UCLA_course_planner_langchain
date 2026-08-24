@@ -125,6 +125,35 @@ def test_missing_required_courses_fail_instead_of_silently_planning(monkeypatch)
     assert "COM SCI 102" in result.errors[0].message
 
 
+def test_impossible_constraints_fail_instead_of_reporting_completed(monkeypatch):
+    raw = [{
+        "course_code": code,
+        "title": code,
+        "units": 4,
+        "description": "",
+        "sections": [{
+            "section_id": "Lec 1", "days": "MWF", "start_time": "9am",
+            "end_time": "9:50am", "location": "", "instructor": "Professor",
+            "capacity": 100, "enrolled": 20, "format": "in-person",
+            "section_type": "lecture",
+        }],
+    } for code in ("COM SCI 101", "COM SCI 102", "COM SCI 103")]
+    monkeypatch.setattr(
+        graph_module,
+        "scrape_quarter_courses",
+        lambda term, department, **kwargs: raw,
+    )
+    monkeypatch.setenv("PLANNER_ENABLE_GRADES", "false")
+    profile = _profile().model_copy(update={"hard_constraints": ["No classes before 10am"]})
+
+    result = run_planner(profile, thread_id="test-no-valid-schedule")
+
+    assert result.status == "failed"
+    assert result.candidates == []
+    assert result.errors[0].node == "schedule"
+    assert "No valid schedule" in result.errors[0].message
+
+
 def test_ranking_renormalizes_around_missing_optional_evidence():
     profile = graph_module._legacy_profile(_profile().model_dump(mode="json"))
     candidate = ScheduleCandidate(

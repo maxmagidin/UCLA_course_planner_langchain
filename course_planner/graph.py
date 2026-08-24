@@ -360,6 +360,15 @@ def schedule_node(state: PlannerState) -> dict[str, Any]:
         profile = _legacy_profile(state["profile"])
         candidates = generate_schedules(_course_objects(state.get("courses", [])), profile)
         candidates = rank_schedules(candidates, profile)
+        if not candidates:
+            return {
+                "candidates": [],
+                **failure(
+                    "schedule",
+                    "No valid schedule matched the required courses, unit range, and hard constraints",
+                    False,
+                ),
+            }
         return {"candidates": _as_dicts(candidates), **event(f"schedule: generated {len(candidates)} candidates")}
     except Exception as exc:
         logger.exception("Schedule generation failed")

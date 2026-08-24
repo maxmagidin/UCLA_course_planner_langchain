@@ -5,23 +5,22 @@ from fastapi.testclient import TestClient
 import course_planner.api as api_module
 import course_planner.graph as graph_module
 from course_planner.api import app
-from course_planner.planner_models import StudentProfile
+from course_planner.planner_models import PlannerResult, StudentProfile
 
 client = TestClient(app)
 
 
 def test_health_and_frontend_are_ready():
-    health = client.get("/health")
+    health = client.get("/api/health")
     frontend = client.get("/app/")
-    javascript = client.get("/app/app.js")
 
     assert health.json() == {"status": "ok"}
-    assert frontend.status_code == 200
-    assert "Start with your DARS" in frontend.text
-    assert "Optional: autofill with your own model" in frontend.text
-    assert "Run planner" in frontend.text
-    assert javascript.status_code == 200
-    assert 'request("/dars/parse"' in javascript.text
+    assert frontend.status_code in {200, 503}
+    if frontend.status_code == 200:
+        assert '<div id="root"></div>' in frontend.text
+        assert "UCLA Course Planner" in frontend.text
+    else:
+        assert "Frontend build needed" in frontend.text
 
 
 def test_dars_parse_returns_reviewable_courses_and_profile_hints():
@@ -136,3 +135,73 @@ def test_plan_endpoint_runs_graph_in_worker_thread(monkeypatch):
     assert response.status_code == 200
     assert response.json()["status"] == "completed"
     assert response.json()["candidates"]
+
+
+def test_horizon_plan_carries_the_top_schedule_into_the_next_term(monkeypatch):
+    received_profiles = []
+
+    def fake_run_planner(profile, **kwargs):
+        received_profiles.append(profile)
+        courses = [{
+            "course_code": code,
+            "title": code,
+            "units": 4,
+            "lecture_section_id": "Lec 1",
+            "discussion_section_id": "",
+        } for code in profile.required_courses]
+        return PlannerResult(
+            run_id=kwargs["run_id"],
+            status="completed",
+            candidates=[{"courses": courses, "total_units": len(courses) * 4}],
+        )
+
+    monkeypatch.setattr(api_module, "run_planner", fake_run_planner)
+    response = client.post("/api/plan/horizon", json={
+        "profile": {
+            "name": "Test Student",
+            "major": "Computer Science",
+            "term": "Fall 2026",
+            "units_completed": 96,
+            "dars_courses": ["MATH 31A"],
+        },
+        "terms": [
+            {
+                "term": "Fall 2026",
+                "required_courses": ["COM SCI 101"],
+                "min_units": 4,
+                "max_units": 4,
+            },
+            {
+                "term": "Winter 2027",
+                "required_courses": ["COM SCI 102"],
+                "min_units": 4,
+                "max_units": 4,
+            },
+        ],
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["terms"][0]["planned_courses"] == ["COM SCI 101"]
+    assert body["terms"][1]["planned_courses"] == ["COM SCI 102"]
+    assert body["completed_courses"] == ["MATH 31A", "COM SCI 101", "COM SCI 102"]
+    assert received_profiles[1].dars_courses == ["MATH 31A", "COM SCI 101"]
+    assert received_profiles[1].units_completed == 100
+
+
+def test_horizon_plan_rejects_a_course_assigned_to_multiple_terms():
+    response = client.post("/api/plan/horizon", json={
+        "profile": {
+            "name": "Test Student",
+            "major": "Computer Science",
+            "term": "Fall 2026",
+        },
+        "terms": [
+            {"term": "Fall 2026", "required_courses": ["COM SCI 101"]},
+            {"term": "Winter 2027", "preferred_courses": ["COM SCI 101"]},
+        ],
+    })
+
+    assert response.status_code == 422
+    assert "Assign each course to one term only" in response.text
