@@ -4,6 +4,24 @@ This version keeps the original UCLA data sources and scheduling domain logic,
 but replaces the eight-process `uagents` message pipeline with one typed,
 checkpointed LangGraph workflow.
 
+## Project history
+
+This project began as the
+[original UCLA Course Planner multi-agent pipeline](https://github.com/matthewdo823-ui/UCLA_course_planner_agent):
+eight independent agents built with
+[Fetch.ai uAgents](https://uagents.fetch.ai/docs), published through
+[Agentverse](https://agentverse.ai/), and accessible from
+[ASI:One](https://asi1.ai/). The historical entry point is preserved in the
+[original Agentverse listing](https://agentverse.ai/agents/details/agent1qvzm8976yty6m5zvtfpdhp55mxy0qdf6mhhzc557tvgs4gwv85ck6g7qpng),
+and the original architecture and source remain available in the original
+repository linked above.
+
+The `langchain-migration` branch is the next version of that project. Its
+orchestration was rewritten with LangChain and LangGraph, and this version was
+taken off the ASI:One/Agentverse platform. It now runs directly as a local web
+app, HTTP API, CLI, or Python library. The old ASI:One adapter remains in the
+repository only as a compatibility reference; it is not the deployed runtime.
+
 ## Architecture
 
 ```text
@@ -45,10 +63,10 @@ Python 3.10 or newer is required.
 
 ```bash
 source .venv/bin/activate
-uvicorn course_planner.api:app --reload
+uvicorn course_planner.api:app --host 127.0.0.1 --port 8765 --reload
 ```
 
-Open <http://127.0.0.1:8000>. The form is prefilled with three Fall 2026
+Open <http://localhost:8765/app/>. The form is prefilled with three Fall 2026
 Computer Science courses that currently produce valid schedule candidates.
 Click **Run direct plan**; no model key is needed. The planner uses the live
 UCLA Schedule of Classes, so this path requires internet access.
@@ -78,6 +96,9 @@ export MODEL_API_KEY="..."
 export MODEL_BASE_URL="https://api.asi1.ai/v1"
 export MODEL_NAME="asi1"
 ```
+
+This optional preset uses ASI:One only as the model API. It does not publish
+the migrated application to ASI:One or Agentverse.
 
 Optional LangSmith tracing:
 
@@ -174,21 +195,26 @@ Each `run_planner` call uses an isolated LangGraph `InMemorySaver` by default.
 Pass a database-backed checkpointer plus stable `thread_id`/`run_id` values in
 production when a user must change a constraint and resume an existing run.
 
-## External usage and optional ASI:One surface
+## Legacy ASI:One compatibility surface
 
-`python run_all.py` now starts one Agent Chat Protocol surface instead of eight
-workers. The adapter lives in `course_planner/asi_surface.py` and does three
-things:
+The current project is not published on ASI:One or Agentverse. Its supported
+entry points are the local web app, HTTP API, CLI, and `run_planner()` Python
+function described above.
+
+For historical compatibility, `python run_all.py` can still start one Agent
+Chat Protocol surface instead of the original eight workers. The adapter lives
+in `course_planner/asi_surface.py` and does three things:
 
 1. Acknowledge an incoming `ChatMessage`.
 2. Accumulate the conversation and ask the configured model provider for a
    validated `StudentProfile` using LangChain structured output.
 3. Invoke the same graph and return the Markdown report.
 
-That makes the product appear as one UCLA Course Planner agent in Agentverse or
-an ASI:One-compatible chat client. The graph remains reusable from a web app,
-CLI, or API; the surface is only a transport adapter. You do not need to use
-this surface at all: call `run_planner(profile)` from your own application.
+If somebody deliberately republishes it, that adapter can make the product
+appear as one UCLA Course Planner agent in Agentverse or an ASI:One-compatible
+chat client. It is not published by this branch. The graph remains reusable
+from a web app, CLI, or API; the surface is only a transport adapter. You do not
+need to use it: call `run_planner(profile)` from your own application.
 
 The provider factory lives in `course_planner/model_provider.py`. The graph
 does not know which model provider is being used. If the planner itself should
