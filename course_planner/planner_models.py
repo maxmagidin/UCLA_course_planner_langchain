@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
 class YearLevel(str, Enum):
@@ -58,6 +58,43 @@ class StudentProfile(BaseModel):
         if value < minimum:
             raise ValueError("max_units must be greater than or equal to min_units")
         return value
+
+
+class ModelConfig(BaseModel):
+    """Transient BYOK configuration; never put this model in PlannerState."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    provider: str = "openai_compatible"
+    api_key: SecretStr = SecretStr("")
+    base_url: str = "https://api.openai.com/v1"
+    model: str = "gpt-4o-mini"
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+
+    @classmethod
+    def from_environment(cls) -> "ModelConfig":
+        import os
+
+        provider = os.getenv("MODEL_PROVIDER", "openai_compatible").lower().strip()
+        asi = provider in {"asi_one", "asi"}
+        return cls(
+            provider=provider,
+            api_key=os.getenv("MODEL_API_KEY")
+            or (os.getenv("ASI_ONE_API_KEY") if asi else None)
+            or (os.getenv("ASI1_API_KEY") if asi else None)
+            or os.getenv("OPENAI_API_KEY", ""),
+            base_url=os.getenv(
+                "MODEL_BASE_URL",
+                os.getenv("ASI_ONE_BASE_URL", "https://api.asi1.ai/v1")
+                if asi
+                else "https://api.openai.com/v1",
+            ),
+            model=os.getenv(
+                "MODEL_NAME",
+                os.getenv("ASI_ONE_MODEL", "asi1") if asi else "gpt-4o-mini",
+            ),
+            temperature=float(os.getenv("MODEL_TEMPERATURE", "0")),
+        )
 
 
 class EvidenceRecord(BaseModel):
