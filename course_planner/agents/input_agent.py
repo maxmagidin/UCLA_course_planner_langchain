@@ -47,11 +47,8 @@ claude_client = AsyncAnthropic(
     api_key=os.environ.get("ANTHROPIC_API_KEY")
 )
 
-#ASI1_API_KEY = os.environ.get("ASI1_API_KEY", "")
-#asi_client = AsyncOpenAI(
- #   base_url="https://api.asi1.ai/v1",
-  #  api_key="sk_bb30115320d346e2a2100842c85ab4890bed8dc2042742058c8083d8c89023eb",
-#)
+# Legacy ASI:One client configuration was removed; the new runtime uses
+# course_planner.asi_one.create_asi_model() and ASI_ONE_API_KEY.
 
 # ---------------------------------------------------------------------------
 # Conversation state
@@ -62,6 +59,7 @@ FIELD_ORDER: list[str] = [
     "year_gpa",
     "units_completed",
     "enrollment_pass",
+    "term",
     "dars_text",
     "required_courses",
     "preferred_courses",
@@ -107,6 +105,7 @@ FIELD_PROMPTS: dict[str, str] = {
         "(Pass 1, Pass 2, or Open Enrollment) and the exact date and time "
         "their pass opens."
     ),
+    "term": "Ask which UCLA term to plan (for example, Fall 2026).",
     "dars_text": (
         "Ask the student to paste their DARS report as plain text — "
         "they should copy everything under 'COURSES COMPLETED' from their "
@@ -249,13 +248,14 @@ def _build_profile(collected: dict, dars_courses: list[str], reply_to: str = "")
     ]
 
     return StudentProfile(
-        name=collected.get("name_major", ""),
-        major=collected.get("name_major", "Undeclared"),
+        name=collected.get("name", collected.get("name_major", "")),
+        major=collected.get("major", collected.get("name_major", "Undeclared")),
         year=year,
         gpa=gpa,
         units_completed=units,
         enrollment_pass=enrollment_pass,
         pass_open_datetime=collected.get("enrollment_pass", ""),
+        term=collected.get("term", ""),
         dars_text=collected.get("dars_text"),
         dars_courses=dars_courses,
         required_courses=required,

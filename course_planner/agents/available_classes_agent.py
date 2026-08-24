@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 ASI1_API_KEY = os.environ.get("ASI1_API_KEY", "")
-asi_client = OpenAI(base_url="https://api.asi1.ai/v1", api_key="sk_bb30115320d346e2a2100842c85ab4890bed8dc2042742058c8083d8c89023eb")
+asi_client = OpenAI(base_url="https://api.asi1.ai/v1", api_key=ASI1_API_KEY)
 
 PREREQ_SYSTEM = (
     "Given this UCLA course description, extract the list of prerequisite "
@@ -223,7 +223,10 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
         if len(parts) >= 2:
             departments_to_scrape.add(parts[0])
 
-    quarter = "Fall 2025"
+    quarter = profile.term
+    if not quarter:
+        ctx.logger.error("StudentProfile.term is required")
+        return
 
     # --- Scrape ---
     all_raw: list[dict] = []

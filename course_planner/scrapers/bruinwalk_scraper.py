@@ -31,7 +31,7 @@ _HEADERS = {
 }
 
 ASI1_API_KEY = os.environ.get("ASI1_API_KEY", "")
-asi_client = OpenAI(base_url="https://api.asi1.ai/v1", api_key=ASI1_API_KEY)
+asi_client = OpenAI(base_url="https://api.asi1.ai/v1", api_key=ASI1_API_KEY) if ASI1_API_KEY else None
 
 REVIEW_SUMMARY_SYSTEM = (
     "Summarize these UCLA professor reviews in 3 fields: a 1-sentence overall "
@@ -67,7 +67,7 @@ def _extract_int(text: str) -> int:
 
 def _summarize_reviews(reviews: list[str]) -> dict:
     """Use ASI:One to produce summary/positive/negative from raw reviews."""
-    if not reviews:
+    if not reviews or asi_client is None:
         return {"summary": "", "positive": "", "negative": ""}
     combined = "\n---\n".join(reviews[:30])  # cap to avoid token overflow
     try:

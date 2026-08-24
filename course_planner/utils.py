@@ -39,6 +39,7 @@ class StudentProfile:
     units_completed: float
     enrollment_pass: EnrollmentPass
     pass_open_datetime: str
+    term: str = ""
     dars_text: str | None = None
     dars_courses: list[str] = field(default_factory=list)
     required_courses: list[str] = field(default_factory=list)

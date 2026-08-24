@@ -1,21 +1,27 @@
-"""Orchestrator entry point — the user-facing Agent instance.
-
-This module creates the main Agent and includes the input_agent's protocol
-so that incoming user ChatMessages are handled by the input agent's
-conversational intake flow.  All other agents run as separate processes
-(see run_all.py).
-"""
+"""CLI entrypoint for the LangGraph planner."""
 
 from __future__ import annotations
 
-from course_planner.agents.input_agent import agent, protocol  # noqa: F401
+import argparse
+import json
+from pathlib import Path
 
-# The input_agent module already calls:
-#   agent = Agent(name="input-agent", seed=..., port=8001, ...)
-#   protocol = Protocol(spec=chat_protocol_spec)
-#   agent.include(protocol, publish_manifest=True)
-#
-# So simply importing it is enough — `agent` is ready to run.
+from course_planner.graph import run_planner
+from course_planner.planner_models import StudentProfile
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the UCLA course planner graph")
+    parser.add_argument("profile", type=Path, help="JSON file containing a StudentProfile")
+    args = parser.parse_args()
+    profile = StudentProfile.model_validate(json.loads(args.profile.read_text()))
+    result = run_planner(profile)
+    print(result.report_markdown)
+    if result.errors:
+        print("\nErrors:")
+        for error in result.errors:
+            print(f"- {error.node}: {error.message}")
+
 
 if __name__ == "__main__":
-    agent.run()
+    main()

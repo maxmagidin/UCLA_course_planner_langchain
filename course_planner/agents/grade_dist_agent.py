@@ -79,18 +79,11 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
         if isinstance(item, TextContent):
             text_blocks.append(item.text)
 
-    if len(text_blocks) == 2:
-        courses_json, profile_json = text_blocks[0], text_blocks[1]
-    elif len(text_blocks) == 1:
-    # Only courses JSON received — profile is missing, try to continue without it
-        courses_json = text_blocks[0]
-        profile_json = None
-    else:
+    if len(text_blocks) != 2:
         ctx.logger.error("Expected 2 TextContent blocks, got %d", len(text_blocks))
-    return
+        return
 
-    courses_json = text_blocks[0]
-    profile_json = text_blocks[1]
+    courses_json, profile_json = text_blocks[0], text_blocks[1]
 
     # --- Deserialize ---
     try:
