@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>UCLA Course Planner</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #f6f7fb; color: #172033; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1120px; margin: 0 auto; padding: 32px 20px 56px; }
+    header { margin-bottom: 24px; }
+    h1 { margin: 0 0 8px; font-size: clamp(2rem, 5vw, 3.5rem); letter-spacing: -.04em; }
+    h2 { margin: 0 0 16px; font-size: 1.2rem; }
+    p { color: #59657a; line-height: 1.55; }
+    .eyebrow { color: #4f46e5; font-size: .75rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+    .grid { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .full { grid-column: 1 / -1; }
+    .card { background: white; border: 1px solid #dfe3ec; border-radius: 16px; padding: 20px; box-shadow: 0 8px 28px #1d29420d; }
+    label { display: grid; gap: 6px; color: #3d4960; font-size: .86rem; font-weight: 700; }
+    input, select, textarea { width: 100%; border: 1px solid #cbd2df; border-radius: 9px; padding: 10px 11px; background: #fff; color: #172033; font: inherit; }
+    textarea { min-height: 92px; resize: vertical; }
+    .hint { font-size: .8rem; color: #718096; font-weight: 500; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+    button { border: 0; border-radius: 9px; padding: 11px 15px; cursor: pointer; font: inherit; font-weight: 800; }
+    .primary { background: #4f46e5; color: white; }
+    .secondary { background: #e9eaf8; color: #3730a3; }
+    button:disabled { cursor: wait; opacity: .6; }
+    pre { margin: 0; max-height: 560px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 10px; padding: 16px; background: #111827; color: #e5e7eb; line-height: 1.55; }
+    .status { min-height: 24px; margin: 12px 0 0; color: #59657a; }
+    .warning { border-left: 4px solid #d97706; background: #fff8eb; padding: 12px 14px; border-radius: 8px; color: #754c08; }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } .full { grid-column: auto; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Local test surface</div>
+    <h1>UCLA Course Planner</h1>
+    <p>Run the deterministic planner directly, or try conversational intake with your own OpenAI-compatible model key. This page is served by FastAPI and does not require ASI:One.</p>
+  </header>
+
+  <section class="card">
+    <h2>1. Student profile</h2>
+    <div class="grid">
+      <label>Name<input id="name" value="Alex Student" /></label>
+      <label>Major<input id="major" value="Computer Science" /></label>
+      <label>Year<select id="year"><option>freshman</option><option>sophomore</option><option selected>junior</option><option>senior</option><option>graduate</option></select></label>
+      <label>GPA<input id="gpa" type="number" min="0" max="4" step=".01" value="3.6" /></label>
+      <label>Units completed<input id="units" type="number" min="0" step="1" value="96" /></label>
+      <label>Enrollment pass<select id="pass"><option value="pass_1">Pass 1</option><option value="pass_2">Pass 2</option><option value="open">Open enrollment</option></select></label>
+      <label>Pass opens<input id="passOpen" value="2026-08-28 09:00" /></label>
+      <label>Term<input id="term" value="Fall 2026" /></label>
+      <label>Minimum units<input id="minUnits" type="number" min="0" value="12" /></label>
+      <label>Maximum units<input id="maxUnits" type="number" min="0" value="16" /></label>
+      <label>Format<select id="format"><option>any</option><option>in-person</option><option>hybrid</option><option>online</option></select></label>
+      <label>Required courses<input id="required" placeholder="COM SCI 111, MATH 33A" /></label>
+      <label>Preferred courses<input id="preferred" placeholder="COM SCI 118" /></label>
+      <label class="full">Hard constraints<textarea id="constraints" placeholder="Friday off; no classes before 10:00 am"></textarea></label>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top:18px">
+    <h2>2. DARS document (optional)</h2>
+    <div class="grid">
+      <label class="full">Paste DARS text<textarea id="darsText" placeholder="Paste completed/in-progress courses here"></textarea></label>
+      <label class="full">Or upload a PDF<input id="darsPdf" type="file" accept="application/pdf" /><span class="hint">The PDF is converted locally to text and course codes are extracted before planning.</span></label>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top:18px">
+    <h2>3. Choose how to run</h2>
+    <div class="warning">Direct planning uses your structured profile and does not need an LLM key. Conversational intake needs a provider key, base URL, and model name.</div>
+    <div class="grid" style="margin-top:16px">
+      <label>Provider<input id="provider" value="openai_compatible" /></label>
+      <label>Model API key<input id="apiKey" type="password" placeholder="Used only for this request" /></label>
+      <label>Base URL<input id="baseUrl" value="https://api.openai.com/v1" /></label>
+      <label>Model name<input id="modelName" value="gpt-4o-mini" /></label>
+      <label class="full">Conversational message<textarea id="conversation" placeholder="Example: I am Alex, a junior Computer Science major with a 3.6 GPA..."></textarea></label>
+    </div>
+    <div class="actions">
+      <button class="primary" id="planButton">Run direct plan</button>
+      <button class="secondary" id="chatButton">Run conversational intake + plan</button>
+    </div>
+    <div class="status" id="status"></div>
+  </section>
+
+  <section class="card" style="margin-top:18px">
+    <h2>Result</h2>
+    <pre id="result">Your report will appear here.</pre>
+  </section>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const splitList = (value) => value.split(/[,;\n]/).map(x => x.trim()).filter(Boolean);
+  const splitConstraints = (value) => value.split(/[;\n]/).map(x => x.trim()).filter(Boolean);
+  const profile = () => ({
+    name: $('name').value.trim(), major: $('major').value.trim(), year: $('year').value,
+    gpa: Number($('gpa').value), units_completed: Number($('units').value),
+    enrollment_pass: $('pass').value, pass_open_datetime: $('passOpen').value.trim(), term: $('term').value.trim(),
+    required_courses: splitList($('required').value), preferred_courses: splitList($('preferred').value),
+    hard_constraints: splitConstraints($('constraints').value), format_preference: $('format').value,
+    min_units: Number($('minUnits').value), max_units: Number($('maxUnits').value)
+  });
+  async function pdfBase64() {
+    const file = $('darsPdf').files[0];
+    if (!file) return null;
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+  const model = () => ({ provider: $('provider').value.trim(), api_key: $('apiKey').value, base_url: $('baseUrl').value.trim(), model: $('modelName').value.trim() });
+  function busy(value) { $('planButton').disabled = value; $('chatButton').disabled = value; $('status').textContent = value ? 'Running… live sources may take a little while.' : ''; }
+  async function send(path, body) {
+    busy(true);
+    try {
+      const response = await fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail ? JSON.stringify(data.detail) : JSON.stringify(data));
+      $('result').textContent = path === '/chat' ? data.result.report_markdown : data.report_markdown;
+      $('status').textContent = 'Completed.';
+    } catch (error) { $('status').textContent = 'Request failed.'; $('result').textContent = String(error); }
+    finally { busy(false); }
+  }
+  $('planButton').onclick = async () => send('/plan', { profile: profile(), dars_text: $('darsText').value || null, dars_pdf_base64: await pdfBase64() });
+  $('chatButton').onclick = async () => {
+    const message = $('conversation').value.trim();
+    if (!message) { $('status').textContent = 'Enter a conversational message first.'; return; }
+    send('/chat', { conversation: [{role: 'user', content: message}], model: model(), dars_text: $('darsText').value || null, dars_pdf_base64: await pdfBase64() });
+  };
+</script>
+</body>
+</html>
