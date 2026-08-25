@@ -365,6 +365,8 @@ def generate_schedules(
             day_schedules, average_gap, max_consecutive = schedule_data
 
             enrollment: list[float] = []
+            enrollment_risks: list[str] = []
+            enrollment_confidences: list[str] = []
             ratings: list[float] = []
             grades: list[float] = []
             workloads: list[float] = []
@@ -376,6 +378,12 @@ def generate_schedules(
                 ]
                 if section_availability:
                     enrollment.append(min(section_availability))
+                enrollment_risks.extend(
+                    section.availability_risk for section in sections
+                )
+                enrollment_confidences.extend(
+                    section.availability_confidence for section in sections
+                )
                 section_ratings = [
                     section.professor_rating
                     for section in sections
@@ -418,6 +426,16 @@ def generate_schedules(
                     min_enrollment_chance=round(min(enrollment), 4)
                     if enrollment
                     else 1.0,
+                    enrollment_risk_level=max(
+                        enrollment_risks or ["unknown"],
+                        key={"unknown": 0, "lower": 1, "elevated": 2, "high": 3}.get,
+                    ),
+                    enrollment_confidence=(
+                        "medium"
+                        if enrollment_confidences
+                        and all(item == "medium" for item in enrollment_confidences)
+                        else "low"
+                    ),
                     avg_bruinwalk_composite=round(sum(ratings) / len(ratings), 4)
                     if ratings
                     else None,

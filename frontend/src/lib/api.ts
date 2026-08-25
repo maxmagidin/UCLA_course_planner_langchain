@@ -3,6 +3,7 @@ import type {
   HorizonPlanResponse,
   HorizonTerm,
   ModelConfig,
+  PlannerJobResponse,
   RoadmapResponse,
   StudentProfile,
 } from '@/types'
@@ -49,11 +50,33 @@ export function parseDars(payload: { dars_text?: string; dars_pdf_base64?: strin
   return request('/api/dars/parse', { method: 'POST', body: JSON.stringify(payload) })
 }
 
-export function runHorizon(profile: StudentProfile, terms: HorizonTerm[]): Promise<HorizonPlanResponse> {
-  return request('/api/plan/horizon', {
+export async function runHorizon(
+  profile: StudentProfile,
+  terms: HorizonTerm[],
+  onProgress?: (job: PlannerJobResponse) => void,
+  signal?: AbortSignal,
+): Promise<HorizonPlanResponse> {
+  const created = await request<PlannerJobResponse>('/api/plan/horizon/jobs', {
     method: 'POST',
     body: JSON.stringify({ profile, terms }),
   })
+  onProgress?.(created)
+
+  for (let attempt = 0; attempt < 1_800; attempt += 1) {
+    if (signal?.aborted) {
+      await request<PlannerJobResponse>(`/api/jobs/${created.id}`, { method: 'DELETE' }).catch(() => undefined)
+      throw new Error('Planning cancelled.')
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 1_000))
+    const job = await request<PlannerJobResponse>(`/api/jobs/${created.id}`)
+    onProgress?.(job)
+    if (job.status === 'completed' && job.result) return job.result
+    if (job.status === 'failed') throw new Error(job.error || job.message || 'The planning job failed.')
+    if (job.status === 'cancelled') throw new Error('Planning cancelled.')
+    if (job.status === 'interrupted') throw new Error('The server restarted before this planning job finished. Run it again.')
+  }
+  await request<PlannerJobResponse>(`/api/jobs/${created.id}`, { method: 'DELETE' }).catch(() => undefined)
+  throw new Error('The planning job exceeded the 30-minute browser limit and was cancelled.')
 }
 
 export function suggestRoadmap(profile: StudentProfile, courses: string[], terms: HorizonTerm[]): Promise<RoadmapResponse> {

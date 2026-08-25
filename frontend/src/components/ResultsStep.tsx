@@ -32,7 +32,7 @@ function CandidateSummary({ candidate }: { candidate: ScheduleCandidate }) {
           ['Units', candidate.total_units ?? 0],
           ['Campus days', candidate.days_on_campus ?? 0],
           ['Score', (candidate.composite_score ?? 0).toFixed(3)],
-          ['Min. availability', `${Math.round(enrollment * 100)}%`],
+          ['Enrollment risk', candidate.enrollment_risk_level || 'unknown'],
         ].map(([label, value]) => (
           <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
             <span className="block text-[10px] font-black uppercase tracking-[.13em] text-slate-400">{label}</span>
@@ -40,7 +40,7 @@ function CandidateSummary({ candidate }: { candidate: ScheduleCandidate }) {
           </div>
         ))}
       </div>
-      <p className="text-xs leading-5 text-slate-500">Availability is a section-specific risk heuristic, not a calibrated enrollment probability.</p>
+      <p className="text-xs leading-5 text-slate-500">Section availability score: {Math.round(enrollment * 100)}/100 · {candidate.enrollment_confidence || 'low'} confidence. This is an ordinal risk signal, not an enrollment probability.</p>
       {candidate.has_unverified_meeting_times && (
         <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900"><AlertTriangle className="mt-0.5 size-4 shrink-0" />At least one selected section has a TBA or unparseable meeting time. Its conflict check is incomplete.</div>
       )}

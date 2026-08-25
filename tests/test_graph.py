@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import course_planner.graph as graph_module
@@ -104,6 +106,34 @@ Unlabelled: MATH 61
     assert classified["remaining"] == ["COM SCI 111", "MATH 61"]
 
 
+@pytest.mark.parametrize(
+    ("fixture_name", "expected"),
+    [
+        (
+            "dars_engineering.txt",
+            {
+                "completed": ["COM SCI 31", "COM SCI 32", "MATH 31A"],
+                "in_progress": ["COM SCI 35L"],
+                "remaining": ["COM SCI 111", "COM SCI 118"],
+                "unclassified": [],
+            },
+        ),
+        (
+            "dars_letters_science.txt",
+            {
+                "completed": ["MATH 31A", "MATH 31B", "MATH 32A"],
+                "in_progress": ["MATH 32B"],
+                "remaining": ["MATH 170A", "MATH 170E", "PHYSICS 1A"],
+                "unclassified": [],
+            },
+        ),
+    ],
+)
+def test_synthetic_dars_layout_fixtures(fixture_name, expected):
+    text = (Path(__file__).parent / "fixtures" / fixture_name).read_text()
+    assert classify_dars_courses(text) == expected
+
+
 def test_graph_joins_parallel_enrichment(monkeypatch):
     raw = []
     for index, (start, end) in enumerate(
@@ -154,6 +184,31 @@ def test_graph_joins_parallel_enrichment(monkeypatch):
     assert "enrollment" in result.evidence
     assert "bruinwalk" in result.evidence
     assert "grades" in result.evidence
+
+
+def test_raw_dars_text_is_removed_before_checkpointing(monkeypatch):
+    captured = {}
+
+    class FakeGraph:
+        def invoke(self, state, config):
+            captured["state"] = state
+            captured["config"] = config
+            return state
+
+    monkeypatch.setattr(
+        graph_module, "build_graph", lambda *, checkpointer: FakeGraph()
+    )
+    profile = _profile().model_copy(
+        update={
+            "dars_text": "private audit text",
+            "dars_courses": ["COM SCI 31"],
+        }
+    )
+
+    run_planner(profile, checkpointer=object())
+
+    assert captured["state"]["profile"]["dars_text"] is None
+    assert captured["state"]["profile"]["dars_courses"] == ["COM SCI 31"]
 
 
 def test_missing_required_courses_fail_instead_of_silently_planning(monkeypatch):

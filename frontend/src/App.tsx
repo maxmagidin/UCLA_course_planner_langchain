@@ -1,5 +1,5 @@
 import { Code2, HeartPulse, Shield, Workflow } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { DarsStep } from '@/components/DarsStep'
 import { PlanningStep } from '@/components/PlanningStep'
@@ -94,10 +94,12 @@ function App() {
   const [terms, setTerms] = useState<EditableTerm[]>([blankTerm(`Fall ${currentYear}`)])
   const [constraints, setConstraints] = useState<ConstraintsState>(defaultConstraints)
   const [planLoading, setPlanLoading] = useState(false)
+  const [planProgress, setPlanProgress] = useState('')
   const [planError, setPlanError] = useState('')
   const [roadmapLoading, setRoadmapLoading] = useState(false)
   const [roadmapStatus, setRoadmapStatus] = useState('')
   const [response, setResponse] = useState<HorizonPlanResponse | null>(null)
+  const planAbortRef = useRef<AbortController | null>(null)
 
   const completedCourses = useMemo(() => parseCourseList(coursesText), [coursesText])
 
@@ -310,16 +312,31 @@ function App() {
       max_units: normalizedTerms[0].max_units,
     }
     setPlanLoading(true)
+    setPlanProgress('Submitting planning job…')
+    const controller = new AbortController()
+    planAbortRef.current = controller
     try {
-      const result = await runHorizon(planningProfile, normalizedTerms)
+      const result = await runHorizon(
+        planningProfile,
+        normalizedTerms,
+        (job) => setPlanProgress(`${job.message} ${job.progress}%`),
+        controller.signal,
+      )
       setProfile(planningProfile)
       setResponse(result)
       advance(3)
     } catch (error) {
       setPlanError(error instanceof Error ? error.message : 'The planner could not complete this run.')
     } finally {
+      planAbortRef.current = null
       setPlanLoading(false)
+      setPlanProgress('')
     }
+  }
+
+  const cancelPlan = () => {
+    setPlanProgress('Requesting cancellation…')
+    planAbortRef.current?.abort()
   }
 
   const autoPlaceAuditCourses = async () => {
@@ -395,7 +412,7 @@ function App() {
         <section className="min-w-0 px-4 pb-12 sm:px-0">
           {step === 0 && <DarsStep darsText={darsText} onDarsTextChange={setDarsText} file={darsFile} onFileChange={setDarsFile} coursesText={coursesText} onCoursesTextChange={setCoursesText} inProgressCoursesText={inProgressCoursesText} onInProgressCoursesTextChange={setInProgressCoursesText} remainingCoursesText={remainingCoursesText} onRemainingCoursesTextChange={setRemainingCoursesText} parsed={darsParsed} loading={darsLoading} status={darsStatus} error={darsError} onParse={readDars} onContinue={continueFromDars} onDemo={loadDemo} />}
           {step === 1 && <ProfileStep profile={profile} onChange={setProfile} completedCourseCount={completedCourses.length} error={profileError} autofillLoading={autofillLoading} autofillStatus={autofillStatus} autofillError={autofillError} onAutofill={useAutofill} onBack={() => setStep(0)} onContinue={continueFromProfile} />}
-          {step === 2 && <PlanningStep mode={mode} onModeChange={changeMode} academicYear={academicYear} onAcademicYearChange={changeAcademicYear} includeSummer={includeSummer} onIncludeSummerChange={changeSummer} terms={terms} onTermsChange={setTerms} auditRemainingCourses={parseCourseList(remainingCoursesText)} roadmapLoading={roadmapLoading} roadmapStatus={roadmapStatus} onAutoPlace={autoPlaceAuditCourses} profile={profile} onProfileChange={setProfile} constraints={constraints} onConstraintsChange={setConstraints} loading={planLoading} error={planError} onBack={() => setStep(1)} onRun={runPlan} />}
+          {step === 2 && <PlanningStep mode={mode} onModeChange={changeMode} academicYear={academicYear} onAcademicYearChange={changeAcademicYear} includeSummer={includeSummer} onIncludeSummerChange={changeSummer} terms={terms} onTermsChange={setTerms} auditRemainingCourses={parseCourseList(remainingCoursesText)} roadmapLoading={roadmapLoading} roadmapStatus={roadmapStatus} onAutoPlace={autoPlaceAuditCourses} profile={profile} onProfileChange={setProfile} constraints={constraints} onConstraintsChange={setConstraints} loading={planLoading} progress={planProgress} error={planError} onBack={() => setStep(1)} onRun={runPlan} onCancel={cancelPlan} />}
           {step === 3 && response && <ResultsStep response={response} studentName={profile.name} onEdit={() => setStep(2)} onStartOver={() => window.location.reload()} />}
         </section>
       </main>

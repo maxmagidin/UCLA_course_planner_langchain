@@ -213,7 +213,10 @@ def get_available_departments(quarter: str = "Fall 2025") -> list[str]:
     params = {"t": term}
     try:
         with httpx.Client(
-            headers=_HEADERS, timeout=30, follow_redirects=True
+            headers=_HEADERS,
+            timeout=httpx.Timeout(30, connect=8),
+            follow_redirects=True,
+            transport=httpx.HTTPTransport(retries=2),
         ) as client:
             resp = client.get(BASE_URL, params=params)
             resp.raise_for_status()
@@ -290,7 +293,10 @@ def scrape_quarter_courses(
 
     try:
         with httpx.Client(
-            headers=_HEADERS, timeout=30, follow_redirects=True
+            headers=_HEADERS,
+            timeout=httpx.Timeout(30, connect=8),
+            follow_redirects=True,
+            transport=httpx.HTTPTransport(retries=2),
         ) as client:
             # The initial request establishes the ASP.NET session required by
             # every expandable-course request that follows.
@@ -464,7 +470,10 @@ def scrape_historical_enrollment(course_code: str) -> list[dict]:
         term = _term_code(qtr)
         try:
             with httpx.Client(
-                headers=_HEADERS, timeout=20, follow_redirects=True
+                headers=_HEADERS,
+                timeout=httpx.Timeout(20, connect=8),
+                follow_redirects=True,
+                transport=httpx.HTTPTransport(retries=2),
             ) as client:
                 # Try the archive page for this quarter
                 resp = client.get(

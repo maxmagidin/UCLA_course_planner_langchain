@@ -100,6 +100,8 @@ export interface ScheduleCandidate {
   days_on_campus: number
   avg_gap_minutes_per_day: number
   min_enrollment_chance: number
+  enrollment_risk_level: 'unknown' | 'lower' | 'elevated' | 'high'
+  enrollment_confidence: 'low' | 'medium'
   schedule_quality_score: number
   composite_score: number
   preference_match_score: number
@@ -141,6 +143,18 @@ export interface HorizonPlanResponse {
   status: PlanStatus
   terms: HorizonTermResult[]
   completed_courses: string[]
+}
+
+export interface PlannerJobResponse {
+  id: string
+  kind: string
+  status: 'queued' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+  progress: number
+  message: string
+  result: HorizonPlanResponse | null
+  error: string
+  created_at: string
+  updated_at: string
 }
 
 export interface RoadmapResponse {

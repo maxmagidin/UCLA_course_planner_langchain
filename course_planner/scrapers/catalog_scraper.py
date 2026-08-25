@@ -57,7 +57,10 @@ def fetch_catalog_course(course_code: str, catalog_year: int) -> dict[str, Any]:
     url = catalog_course_url(normalized, catalog_year)
     try:
         with httpx.Client(
-            headers=_HEADERS, timeout=20, follow_redirects=True
+            headers=_HEADERS,
+            timeout=httpx.Timeout(20, connect=8),
+            follow_redirects=True,
+            transport=httpx.HTTPTransport(retries=2),
         ) as client:
             response = client.get(url)
             response.raise_for_status()

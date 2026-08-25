@@ -1,0 +1,16 @@
+Student Name: Test Engineering Student
+Declared Major: Computer Science
+Class Level: Junior
+Cumulative GPA: 3.55
+Units Completed: 91
+
+COURSES COMPLETED
+COM SCI 31 A
+COM SCI 32 A-
+MATH 31A B+
+
+COURSES IN PROGRESS
+COM SCI 35L IP
+
+REQUIREMENTS NOT SATISFIED
+Still Needed: COM SCI 111 or COM SCI 118

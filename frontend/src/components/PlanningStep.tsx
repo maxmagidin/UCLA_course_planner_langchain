@@ -28,9 +28,11 @@ interface PlanningStepProps {
   constraints: ConstraintsState
   onConstraintsChange: (constraints: ConstraintsState) => void
   loading: boolean
+  progress: string
   error: string
   onBack: () => void
   onRun: () => void
+  onCancel: () => void
 }
 
 export function PlanningStep({
@@ -51,9 +53,11 @@ export function PlanningStep({
   constraints,
   onConstraintsChange,
   loading,
+  progress,
   error,
   onBack,
   onRun,
+  onCancel,
 }: PlanningStepProps) {
   const updateTerm = (id: string, patch: Partial<EditableTerm>) => {
     onTermsChange(terms.map((term) => term.id === id ? { ...term, ...patch } : term))
@@ -225,11 +229,15 @@ export function PlanningStep({
       </Card>
 
       {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</div>}
+      {loading && progress && <div role="status" className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-800">{progress}</div>}
       <div className="flex items-center justify-between gap-3">
         <Button type="button" variant="ghost" onClick={onBack}><ArrowLeft /> Back</Button>
-        <Button type="button" variant="gold" size="lg" onClick={onRun} disabled={loading}>
-          <Play className="fill-current" /> {loading ? `Planning ${terms.length} quarter${terms.length > 1 ? 's' : ''}…` : `Run ${mode === 'year' ? 'academic-year' : 'quarter'} planner`}
-        </Button>
+        <div className="flex items-center gap-3">
+          {loading && <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>}
+          <Button type="button" variant="gold" size="lg" onClick={onRun} disabled={loading}>
+            <Play className="fill-current" /> {loading ? `Planning ${terms.length} quarter${terms.length > 1 ? 's' : ''}…` : `Run ${mode === 'year' ? 'academic-year' : 'quarter'} planner`}
+          </Button>
+        </div>
       </div>
     </div>
   )

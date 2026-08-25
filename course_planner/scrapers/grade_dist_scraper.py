@@ -113,7 +113,11 @@ class _RawRow:
 def _download_sheet(url: str, label: str) -> pd.DataFrame:
     """Download a Google Sheet as CSV and return a DataFrame."""
     try:
-        with httpx.Client(timeout=30, follow_redirects=True) as client:
+        with httpx.Client(
+            timeout=httpx.Timeout(30, connect=8),
+            follow_redirects=True,
+            transport=httpx.HTTPTransport(retries=2),
+        ) as client:
             resp = client.get(url)
             resp.raise_for_status()
             return pd.read_csv(io.StringIO(resp.text))

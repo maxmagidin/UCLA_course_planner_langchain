@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
+from collections.abc import Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
+from fastapi import Request as FastAPIRequest
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +31,8 @@ from course_planner.documents import (
 )
 from course_planner.graph import run_planner
 from course_planner.intake import extract_profile
+from course_planner.jobs import JobQueueFull, get_job_manager
+from course_planner.persistence import database_ready
 from course_planner.planner_models import ModelConfig, PlannerResult, StudentProfile
 from course_planner.roadmap import suggest_roadmap
 from course_planner.terms import parse_ucla_term
@@ -129,6 +135,26 @@ class RoadmapResponse(BaseModel):
     warnings: list[str]
 
 
+class PlannerJobResponse(BaseModel):
+    id: str
+    kind: str
+    status: Literal[
+        "queued",
+        "running",
+        "cancelling",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted",
+    ]
+    progress: int = Field(ge=0, le=100)
+    message: str
+    result: HorizonPlanResponse | None = None
+    error: str = ""
+    created_at: str
+    updated_at: str
+
+
 class DarsParseRequest(BaseModel):
     dars_text: str | None = Field(default=None, max_length=2_000_000)
     dars_pdf_base64: str | None = Field(default=None, max_length=30_000_000)
@@ -145,7 +171,28 @@ class DarsParseResponse(BaseModel):
     profile_hints: dict[str, str | float]
 
 
-app = FastAPI(title="UCLA Course Planner", version="0.5.0")
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    manager = get_job_manager()
+    yield
+    manager.shutdown()
+
+
+app = FastAPI(title="UCLA Course Planner", version="0.6.0", lifespan=_lifespan)
+
+
+@app.middleware("http")
+async def security_headers(request: FastAPIRequest, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["X-Frame-Options"] = "DENY"
+    if request.url.path.startswith(
+        ("/api/", "/jobs/", "/plan/", "/dars/", "/intake", "/chat")
+    ):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
 
 _frontend_origins = [
     origin.strip()
@@ -157,7 +204,7 @@ if _frontend_origins:
         CORSMiddleware,
         allow_origins=_frontend_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type"],
     )
 
@@ -188,6 +235,27 @@ def frontend() -> RedirectResponse:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/ready")
+@app.get("/api/ready")
+def ready() -> dict[str, Any]:
+    storage_ready, storage_detail = database_ready()
+    workers = get_job_manager().ready()
+    if not storage_ready or not workers["ready"]:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "not_ready",
+                "storage": storage_detail,
+                "workers": workers,
+            },
+        )
+    return {
+        "status": "ready",
+        "storage": "sqlite",
+        "workers": workers,
+    }
 
 
 @app.post("/dars/parse", response_model=DarsParseResponse)
@@ -238,6 +306,39 @@ async def plan_horizon(request: HorizonPlanRequest) -> HorizonPlanResponse:
     return await asyncio.to_thread(_run_horizon, request)
 
 
+@app.post("/plan/horizon/jobs", response_model=PlannerJobResponse, status_code=202)
+@app.post("/api/plan/horizon/jobs", response_model=PlannerJobResponse, status_code=202)
+async def create_horizon_job(request: HorizonPlanRequest) -> PlannerJobResponse:
+    try:
+        job = await asyncio.to_thread(
+            get_job_manager().submit,
+            "horizon",
+            request.model_dump(mode="json"),
+            _run_horizon_job,
+        )
+    except (JobQueueFull, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return PlannerJobResponse.model_validate(job)
+
+
+@app.get("/jobs/{job_id}", response_model=PlannerJobResponse)
+@app.get("/api/jobs/{job_id}", response_model=PlannerJobResponse)
+async def get_planner_job(job_id: str) -> PlannerJobResponse:
+    job = await asyncio.to_thread(get_job_manager().get, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Planner job not found")
+    return PlannerJobResponse.model_validate(job)
+
+
+@app.delete("/jobs/{job_id}", response_model=PlannerJobResponse, status_code=202)
+@app.delete("/api/jobs/{job_id}", response_model=PlannerJobResponse, status_code=202)
+async def cancel_planner_job(job_id: str) -> PlannerJobResponse:
+    job = await asyncio.to_thread(get_job_manager().cancel, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Planner job not found")
+    return PlannerJobResponse.model_validate(job)
+
+
 @app.post("/roadmap/suggest", response_model=RoadmapResponse)
 @app.post("/api/roadmap/suggest", response_model=RoadmapResponse)
 async def roadmap_suggestion(request: RoadmapRequest) -> RoadmapResponse:
@@ -276,7 +377,25 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
     }
 
 
-def _run_horizon(request: HorizonPlanRequest) -> HorizonPlanResponse:
+def _run_horizon_job(
+    payload: dict[str, Any],
+    progress: Callable[[int, str], None],
+    cancel_event: threading.Event,
+) -> dict[str, Any]:
+    request = HorizonPlanRequest.model_validate(payload)
+    return _run_horizon(
+        request,
+        progress_callback=progress,
+        cancel_event=cancel_event,
+    ).model_dump(mode="json")
+
+
+def _run_horizon(
+    request: HorizonPlanRequest,
+    *,
+    progress_callback: Callable[[int, str], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> HorizonPlanResponse:
     horizon_run_id = str(uuid4())
     completed = list(dict.fromkeys(request.profile.dars_courses))
     units_completed = request.profile.units_completed
@@ -284,6 +403,13 @@ def _run_horizon(request: HorizonPlanRequest) -> HorizonPlanResponse:
     planned_term_count = 0
 
     for index, term in enumerate(request.terms, start=1):
+        if cancel_event and cancel_event.is_set():
+            break
+        if progress_callback:
+            progress_callback(
+                5 + int((index - 1) / len(request.terms) * 90),
+                f"Planning {term.term} ({index} of {len(request.terms)}).",
+            )
         term_profile = request.profile.model_copy(
             update={
                 "term": term.term,
@@ -320,6 +446,11 @@ def _run_horizon(request: HorizonPlanRequest) -> HorizonPlanResponse:
                 result=result,
             )
         )
+        if progress_callback:
+            progress_callback(
+                5 + int(index / len(request.terms) * 90),
+                f"Finished {term.term} ({index} of {len(request.terms)}).",
+            )
 
     if planned_term_count == len(request.terms):
         status: Literal["completed", "partial", "failed"] = "completed"

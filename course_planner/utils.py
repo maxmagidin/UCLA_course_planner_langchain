@@ -76,6 +76,7 @@ class Section:
     section_type: str = "lecture"  # "lecture", "discussion", "lab"
     availability_score: float | None = None
     availability_confidence: str = "low"
+    availability_risk: str = "unknown"
     professor_rating: float | None = None
     avg_gpa: float | None = None
     workload_hours_per_week: float | None = None
@@ -196,6 +197,8 @@ class ScheduleCandidate:
     max_consecutive_minutes_any_day: int = 0
     avg_enrollment_chance: float = 0.0
     min_enrollment_chance: float = 1.0
+    enrollment_risk_level: str = "unknown"
+    enrollment_confidence: str = "low"
     avg_bruinwalk_composite: float | None = None
     avg_gpa: float | None = None
     min_gpa: float | None = None

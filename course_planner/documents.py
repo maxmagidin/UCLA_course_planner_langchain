@@ -15,6 +15,7 @@ _COURSE_CODE = re.compile(
 )
 _MAX_PDF_BYTES = 15 * 1024 * 1024
 _MAX_PDF_PAGES = 80
+_MAX_EXTRACTED_CHARACTERS = 2_000_000
 
 
 def _line_value(text: str, labels: str) -> str | None:
@@ -45,21 +46,57 @@ def extract_text_from_pdf_base64(encoded_pdf: str) -> str:
             text = page.extract_text()
             if text:
                 pieces.append(text)
+                if sum(len(piece) for piece in pieces) > _MAX_EXTRACTED_CHARACTERS:
+                    raise ValueError(
+                        "DARS PDF exceeds the extracted-text processing limit"
+                    )
     return "\n".join(pieces)
 
 
 def extract_course_codes(text: str) -> list[str]:
     """Extract normalized course codes such as ``COM SCI 31`` from DARS text."""
-    text = re.sub(
-        r"\b(?:and|or|the)\s+(?=[A-Z]{2,6}\s+\d)",
-        "",
-        text or "",
-        flags=re.IGNORECASE,
-    )
-    found = {
-        " ".join(f"{department} {number}".upper().split())
-        for department, number in _COURSE_CODE.findall(text)
-    }
+    text = text or ""
+    for _ in range(3):
+        text = re.sub(
+            r"\b(?:and|or|the|from|courses?|one|select|choose|take)\s+"
+            r"(?=[A-Z]{2,8}(?:\s+[A-Z]{2,8})?\s+\d)",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+    found: set[str] = set()
+    for line in text.splitlines():
+        matches = [
+            match
+            for match in _COURSE_CODE.finditer(line)
+            if match.group(1).upper()
+            not in {
+                "AND",
+                "CHOOSE",
+                "COURSE",
+                "COURSES",
+                "FROM",
+                "ONE",
+                "OR",
+                "SELECT",
+                "TAKE",
+                "THE",
+            }
+        ]
+        for index, match in enumerate(matches):
+            department, number = match.groups()
+            normalized_department = " ".join(department.upper().split())
+            found.add(f"{normalized_department} {number.upper()}")
+            segment_end = (
+                matches[index + 1].start() if index + 1 < len(matches) else len(line)
+            )
+            trailing = line[match.end() : segment_end]
+            for relative in re.findall(
+                r"\b(?:and|or)\s+((?:C?M)?\d{1,3}[A-Z]{0,2})\b",
+                trailing,
+                flags=re.IGNORECASE,
+            ):
+                found.add(f"{normalized_department} {relative.upper()}")
     return sorted(found)
 
 

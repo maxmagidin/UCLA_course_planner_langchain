@@ -1,0 +1,19 @@
+Name: Test L&S Student
+Academic Program: Mathematics
+Academic Level: Senior
+Overall GPA: 3.21
+Total Units: 142
+
+COURSE HISTORY / WORK COMPLETED
+MATH 31A B
+MATH 31B B-
+MATH 32A P
+
+CURRENTLY ENROLLED
+MATH 32B IP
+
+REQUIREMENT NOT SATISFIED
+Select one course from MATH 170A or 170E
+
+UNLABELLED TRANSFER MATCH
+PHYSICS 1A

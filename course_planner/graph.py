@@ -20,6 +20,7 @@ from uuid import uuid4
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from course_planner.persistence import planner_checkpointer
 from course_planner.planner_models import PlannerResult, StudentProfile
 from course_planner.prerequisites import (
     evaluate_requisites,
@@ -461,6 +462,18 @@ def enrollment_node(state: PlannerState) -> dict[str, Any]:
                     4,
                 )
                 section.availability_confidence = "medium" if n >= 3 else "low"
+                if section.capacity <= 0:
+                    section.availability_risk = "unknown"
+                elif (
+                    section.waitlist > 0
+                    or section.enrolled >= section.capacity
+                    or section.availability_score <= 0.25
+                ):
+                    section.availability_risk = "high"
+                elif section.availability_score <= 0.5:
+                    section.availability_risk = "elevated"
+                else:
+                    section.availability_risk = "lower"
                 section_scores.append(section.availability_score)
 
             current = course.sections[0] if course.sections else None
@@ -777,15 +790,33 @@ def run_planner(
     )
     run_id = run_id or str(uuid4())
     thread_id = thread_id or run_id
+    if checkpointer is not None:
+        return _invoke_planner(parsed, thread_id, run_id, checkpointer)
+    with planner_checkpointer() as persistent:
+        return _invoke_planner(parsed, thread_id, run_id, persistent)
+
+
+def _invoke_planner(
+    profile: StudentProfile,
+    thread_id: str,
+    run_id: str,
+    checkpointer,
+) -> PlannerResult:
+    # Course classifications are sufficient after ingestion. Keeping the raw
+    # audit text out of graph state prevents it from entering checkpoints.
+    checkpoint_profile = profile.model_copy(update={"dars_text": None})
     state = build_graph(checkpointer=checkpointer).invoke(
         {
             "run_id": run_id,
             "thread_id": thread_id,
-            "profile": parsed.model_dump(mode="json"),
+            "profile": checkpoint_profile.model_dump(mode="json"),
             "errors": [],
             "events": [],
         },
-        config={"configurable": {"thread_id": thread_id, "checkpoint_ns": run_id}},
+        config={
+            "configurable": {"thread_id": thread_id, "checkpoint_ns": run_id},
+            "metadata": {"run_id": run_id},
+        },
     )
     errors = [item for item in state.get("errors", []) if isinstance(item, dict)]
     return PlannerResult(

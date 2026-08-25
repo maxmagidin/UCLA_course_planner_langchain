@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import time
+
 from fastapi.testclient import TestClient
 
 import course_planner.api as api_module
 import course_planner.graph as graph_module
+import course_planner.jobs as jobs_module
 from course_planner.api import app
 from course_planner.planner_models import PlannerResult, StudentProfile
 from course_planner.roadmap import RoadmapSuggestion, RoadmapTerm
@@ -285,3 +288,56 @@ def test_roadmap_endpoint_returns_reviewable_placements(monkeypatch):
     assert response.status_code == 200
     assert response.json()["terms"][0]["courses"] == ["COM SCI 32"]
     assert response.json()["unplaced_courses"] == ["COM SCI 111"]
+
+
+def test_background_horizon_job_progress_and_result(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLANNER_DATABASE_PATH", str(tmp_path / "api-jobs.sqlite3"))
+    jobs_module.reset_job_manager_for_tests()
+
+    def fake_job(payload, progress, cancel):
+        progress(55, "Testing one term.")
+        return {
+            "run_id": "background-test",
+            "status": "completed",
+            "terms": [],
+            "completed_courses": payload["profile"].get("dars_courses", []),
+        }
+
+    monkeypatch.setattr(api_module, "_run_horizon_job", fake_job)
+    try:
+        created = client.post(
+            "/api/plan/horizon/jobs",
+            json={
+                "profile": {
+                    "name": "Test Student",
+                    "major": "Computer Science",
+                    "term": "Fall 2026",
+                    "dars_courses": ["COM SCI 31"],
+                },
+                "terms": [
+                    {
+                        "term": "Fall 2026",
+                        "required_courses": ["COM SCI 32"],
+                        "min_units": 4,
+                        "max_units": 4,
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 202
+        job_id = created.json()["id"]
+
+        for _ in range(100):
+            status = client.get(f"/api/jobs/{job_id}")
+            assert status.status_code == 200
+            if status.json()["status"] == "completed":
+                break
+            time.sleep(0.01)
+        else:
+            raise AssertionError("background API job did not finish")
+
+        assert status.json()["progress"] == 100
+        assert status.json()["result"]["run_id"] == "background-test"
+        assert client.get("/api/ready").json()["status"] == "ready"
+    finally:
+        jobs_module.reset_job_manager_for_tests()

@@ -56,9 +56,9 @@ def build_report(
             [
                 "## Recommended schedule",
                 f"**Rank #1:** {codes}",
-                f"**Composite:** {top.composite_score:.3f} · **Units:** {top.total_units} · **Minimum availability heuristic:** {top.min_enrollment_chance:.0%}",
+                f"**Composite:** {top.composite_score:.3f} · **Units:** {top.total_units} · **Enrollment risk:** {top.enrollment_risk_level} ({top.enrollment_confidence} confidence)",
                 "",
-                "| Rank | Courses and sections | Score | Units | Availability heuristic | Schedule quality |",
+                "| Rank | Courses and sections | Score | Units | Enrollment risk | Schedule quality |",
                 "|---:|---|---:|---:|---:|---:|",
             ]
         )
@@ -66,7 +66,7 @@ def build_report(
             lines.append(
                 f"| {candidate.rank} | {_schedule_label(candidate)} | "
                 f"{candidate.composite_score:.3f} | {candidate.total_units} | "
-                f"{candidate.min_enrollment_chance:.0%} | {candidate.schedule_quality_score:.3f} |"
+                f"{candidate.enrollment_risk_level} ({candidate.enrollment_confidence}) | {candidate.schedule_quality_score:.3f} |"
             )
         lines.extend(
             [
@@ -112,7 +112,7 @@ def build_report(
         lines.extend(
             [
                 "",
-                "Availability is a section-specific risk heuristic, not a calibrated probability or guarantee of enrollment.",
+                "Availability is a section-specific ordinal risk score, not a calibrated probability or guarantee of enrollment.",
                 "",
             ]
         )
