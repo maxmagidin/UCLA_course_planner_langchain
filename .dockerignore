@@ -1,0 +1,15 @@
+.git
+.github
+.data
+.env
+.venv
+.DS_Store
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+frontend/dist
+frontend/node_modules
+frontend/*.tsbuildinfo
+tests
+.lavish

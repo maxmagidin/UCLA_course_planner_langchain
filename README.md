@@ -93,6 +93,16 @@ npm run build --prefix frontend
 .venv/bin/python -m uvicorn course_planner.api:app --host 127.0.0.1 --port 8765
 ```
 
+Docker is also supported. It builds the Vite application into the FastAPI
+image and keeps planner state in a named volume:
+
+```bash
+docker compose up --build
+```
+
+Then open <http://127.0.0.1:8765/app/>. The container runs as a non-root user
+and exposes `/api/ready` for readiness checks.
+
 ## Browser workflow
 
 The React application is a complete interface over the same public API used by
@@ -107,8 +117,9 @@ the CLI and Python entrypoint:
    and preferred courses yourself, or auto-place remaining audit courses in
    their earliest prerequisite-safe term using the official catalog. Then set
    unit ranges, schedule constraints, and ranking preferences.
-4. **Results:** compare section-level schedules, evidence freshness, partial
-   failures, and downloadable Markdown reports.
+4. **Results:** watch the background job progress, compare section-level
+   schedules, evidence freshness, partial failures, and downloadable Markdown
+   reports. A run can be cancelled between terms.
 
 In academic-year mode, catalog-based auto-placement respects prerequisite
 order before the run, and the top valid schedule from each term is added to
@@ -284,9 +295,31 @@ keep the key only in the user's browser or server-side secret manager.
   It should be added as another typed retrieval tool and evidence record rather
   than silently mixing arbitrary PDF text into the model prompt.
 
-Each `run_planner` call uses an isolated LangGraph `InMemorySaver` by default.
-Pass a database-backed checkpointer plus stable `thread_id`/`run_id` values in
-production when a user must change a constraint and resume an existing run.
+## Persistence and background jobs
+
+Planner graph checkpoints and web jobs persist in SQLite at
+`.data/planner.sqlite3` by default. The checkpointer uses LangGraph's SQLite
+backend with strict serialization rather than Python pickle. Override the path
+with `PLANNER_DATABASE_PATH`.
+
+Long horizon requests use the background-job API:
+
+- `POST /api/plan/horizon/jobs` starts a bounded job.
+- `GET /api/jobs/{job_id}` returns status, progress, and the final result.
+- `DELETE /api/jobs/{job_id}` requests cooperative cancellation.
+
+The original synchronous `POST /api/plan/horizon` route remains available for
+scripts and compatibility. `PLANNER_JOB_WORKERS`,
+`PLANNER_MAX_QUEUED_JOBS`, and `PLANNER_JOB_RETENTION_DAYS` tune the local
+worker pool and record retention. Raw uploaded DARS text is removed from the
+persisted job request, but profile and result records can still contain
+educational information; protect the database file and choose a retention
+period appropriate for the deployment.
+
+This SQLite-backed queue is deliberately a single-process deployment. Do not
+start multiple Uvicorn workers against it. A multi-instance public service
+should replace it with a managed database and external task queue, and add
+authentication before accepting student records.
 
 ## Legacy ASI:One compatibility surface
 
@@ -326,6 +359,12 @@ graph and hard constraints.
 - The old runtime bugs were corrected in the compatibility files: the schedule
   message loop, the grade-distribution early return, the stale term, and the
   committed ASI key.
-- Recommended production follow-ups are a persistent database checkpointer,
-  background jobs with progress/cancellation for long horizons, broader DARS
-  fixture coverage, and calibrated enrollment-risk evaluation.
+- Remaining production follow-ups are authentication and encrypted student
+  data storage, a managed database/task queue for multi-instance deployments,
+  broader de-identified DARS fixture coverage, and calibrated enrollment-risk
+  evaluation from longitudinal snapshots.
+
+## License
+
+This reworked project is available under the [MIT License](LICENSE). The
+original repository and third-party services retain their own terms.

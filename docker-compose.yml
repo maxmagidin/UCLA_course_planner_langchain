@@ -1,0 +1,16 @@
+services:
+  planner:
+    build: .
+    ports:
+      - "8765:8765"
+    environment:
+      PLANNER_DATABASE_PATH: /app/.data/planner.sqlite3
+      PLANNER_JOB_WORKERS: "2"
+      PLANNER_MAX_QUEUED_JOBS: "20"
+      PLANNER_JOB_RETENTION_DAYS: "7"
+    volumes:
+      - planner-data:/app/.data
+    restart: unless-stopped
+
+volumes:
+  planner-data:
