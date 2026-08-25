@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from course_planner.documents import (
+    classify_dars_courses,
     extract_course_codes,
     extract_dars_hints,
     extract_text_from_pdf_base64,
@@ -27,6 +28,8 @@ from course_planner.documents import (
 from course_planner.graph import run_planner
 from course_planner.intake import extract_profile
 from course_planner.planner_models import ModelConfig, PlannerResult, StudentProfile
+from course_planner.roadmap import suggest_roadmap
+from course_planner.terms import parse_ucla_term
 
 
 class ConversationMessage(BaseModel):
@@ -62,6 +65,11 @@ class HorizonTerm(BaseModel):
     def validate_unit_range(self) -> HorizonTerm:
         if self.max_units < self.min_units:
             raise ValueError("max_units must be greater than or equal to min_units")
+        return self
+
+    @model_validator(mode="after")
+    def validate_term(self) -> HorizonTerm:
+        self.term = parse_ucla_term(self.term).label
         return self
 
 
@@ -103,6 +111,24 @@ class HorizonPlanResponse(BaseModel):
     completed_courses: list[str]
 
 
+class RoadmapRequest(BaseModel):
+    profile: StudentProfile
+    courses: list[str] = Field(min_length=1, max_length=60)
+    terms: list[HorizonTerm] = Field(min_length=1, max_length=4)
+
+
+class RoadmapTermResponse(BaseModel):
+    term: str
+    courses: list[str]
+    total_units: float
+
+
+class RoadmapResponse(BaseModel):
+    terms: list[RoadmapTermResponse]
+    unplaced_courses: list[str]
+    warnings: list[str]
+
+
 class DarsParseRequest(BaseModel):
     dars_text: str | None = Field(default=None, max_length=2_000_000)
     dars_pdf_base64: str | None = Field(default=None, max_length=30_000_000)
@@ -112,10 +138,14 @@ class DarsParseResponse(BaseModel):
     source: Literal["text", "pdf"]
     character_count: int
     course_codes: list[str]
+    completed_courses: list[str]
+    in_progress_courses: list[str]
+    remaining_courses: list[str]
+    unclassified_courses: list[str]
     profile_hints: dict[str, str | float]
 
 
-app = FastAPI(title="UCLA Course Planner", version="0.4.0")
+app = FastAPI(title="UCLA Course Planner", version="0.5.0")
 
 _frontend_origins = [
     origin.strip()
@@ -167,11 +197,18 @@ async def parse_dars(request: DarsParseRequest) -> DarsParseResponse:
         _document_text, request.dars_text, request.dars_pdf_base64
     )
     if not text or not text.strip():
-        raise HTTPException(status_code=400, detail="Paste DARS text or upload a readable DARS PDF")
+        raise HTTPException(
+            status_code=400, detail="Paste DARS text or upload a readable DARS PDF"
+        )
+    classified = classify_dars_courses(text)
     return DarsParseResponse(
         source="pdf" if request.dars_pdf_base64 else "text",
         character_count=len(text),
         course_codes=extract_course_codes(text),
+        completed_courses=classified["completed"],
+        in_progress_courses=classified["in_progress"],
+        remaining_courses=classified["remaining"],
+        unclassified_courses=classified["unclassified"],
         profile_hints=extract_dars_hints(text),
     )
 
@@ -201,6 +238,29 @@ async def plan_horizon(request: HorizonPlanRequest) -> HorizonPlanResponse:
     return await asyncio.to_thread(_run_horizon, request)
 
 
+@app.post("/roadmap/suggest", response_model=RoadmapResponse)
+@app.post("/api/roadmap/suggest", response_model=RoadmapResponse)
+async def roadmap_suggestion(request: RoadmapRequest) -> RoadmapResponse:
+    suggestion = await asyncio.to_thread(
+        suggest_roadmap,
+        request.profile.dars_courses,
+        request.courses,
+        [(term.term, term.max_units) for term in request.terms],
+    )
+    return RoadmapResponse(
+        terms=[
+            RoadmapTermResponse(
+                term=term.term,
+                courses=term.courses,
+                total_units=term.total_units,
+            )
+            for term in suggestion.terms
+        ],
+        unplaced_courses=suggestion.unplaced_courses,
+        warnings=suggestion.warnings,
+    )
+
+
 @app.post("/chat", response_model=dict[str, Any])
 @app.post("/api/chat", response_model=dict[str, Any])
 async def chat(request: ChatRequest) -> dict[str, Any]:
@@ -210,7 +270,10 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
         _apply_dars, profile, request.dars_text, request.dars_pdf_base64
     )
     result = await asyncio.to_thread(run_planner, profile)
-    return {"profile": profile.model_dump(mode="json"), "result": result.model_dump(mode="json")}
+    return {
+        "profile": profile.model_dump(mode="json"),
+        "result": result.model_dump(mode="json"),
+    }
 
 
 def _run_horizon(request: HorizonPlanRequest) -> HorizonPlanResponse:
@@ -221,15 +284,17 @@ def _run_horizon(request: HorizonPlanRequest) -> HorizonPlanResponse:
     planned_term_count = 0
 
     for index, term in enumerate(request.terms, start=1):
-        term_profile = request.profile.model_copy(update={
-            "term": term.term,
-            "dars_courses": completed.copy(),
-            "required_courses": list(dict.fromkeys(term.required_courses)),
-            "preferred_courses": list(dict.fromkeys(term.preferred_courses)),
-            "min_units": term.min_units,
-            "max_units": term.max_units,
-            "units_completed": units_completed,
-        })
+        term_profile = request.profile.model_copy(
+            update={
+                "term": term.term,
+                "dars_courses": completed.copy(),
+                "required_courses": list(dict.fromkeys(term.required_courses)),
+                "preferred_courses": list(dict.fromkeys(term.preferred_courses)),
+                "min_units": term.min_units,
+                "max_units": term.max_units,
+                "units_completed": units_completed,
+            }
+        )
         result = run_planner(
             term_profile,
             thread_id=horizon_run_id,
@@ -244,13 +309,17 @@ def _run_horizon(request: HorizonPlanRequest) -> HorizonPlanResponse:
         if planned_courses:
             planned_term_count += 1
             completed = list(dict.fromkeys(completed + planned_courses))
-            units_completed += float((top_candidate or {}).get("total_units", 0.0) or 0.0)
-        term_results.append(HorizonTermResult(
-            term=term.term,
-            planned_courses=planned_courses,
-            completed_courses_after_term=completed.copy(),
-            result=result,
-        ))
+            units_completed += float(
+                (top_candidate or {}).get("total_units", 0.0) or 0.0
+            )
+        term_results.append(
+            HorizonTermResult(
+                term=term.term,
+                planned_courses=planned_courses,
+                completed_courses_after_term=completed.copy(),
+                result=result,
+            )
+        )
 
     if planned_term_count == len(request.terms):
         status: Literal["completed", "partial", "failed"] = "completed"
@@ -288,11 +357,21 @@ def _add_document_context(request: ChatRequest) -> list[dict[str, str]]:
     conversation = [item.model_dump() for item in request.conversation]
     text = _document_text(request.dars_text, request.dars_pdf_base64)
     if text:
-        codes = extract_course_codes(text)
-        conversation.append({
-            "role": "user",
-            "content": "DARS document course codes extracted deterministically: " + ", ".join(codes),
-        })
+        classified = classify_dars_courses(text)
+        codes = classified["completed"]
+        conversation.append(
+            {
+                "role": "user",
+                "content": (
+                    "DARS completed courses extracted deterministically: "
+                    + ", ".join(codes)
+                    + ". In-progress courses: "
+                    + ", ".join(classified["in_progress"])
+                    + ". Remaining courses: "
+                    + ", ".join(classified["remaining"])
+                ),
+            }
+        )
     return conversation
 
 
@@ -301,7 +380,9 @@ def _document_text(dars_text: str | None, dars_pdf_base64: str | None) -> str | 
         try:
             return extract_text_from_pdf_base64(dars_pdf_base64)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Could not read DARS PDF: {exc}") from exc
+            raise HTTPException(
+                status_code=400, detail=f"Could not read DARS PDF: {exc}"
+            ) from exc
     return dars_text
 
 
@@ -313,5 +394,16 @@ def _apply_dars(
     text = _document_text(dars_text, dars_pdf_base64)
     if not text:
         return profile
-    codes = extract_course_codes(text)
-    return profile.model_copy(update={"dars_text": text, "dars_courses": sorted(set(profile.dars_courses + codes))})
+    classified = classify_dars_courses(text)
+    return profile.model_copy(
+        update={
+            "dars_text": text,
+            "dars_courses": sorted(set(profile.dars_courses + classified["completed"])),
+            "dars_in_progress_courses": sorted(
+                set(profile.dars_in_progress_courses + classified["in_progress"])
+            ),
+            "dars_remaining_courses": sorted(
+                set(profile.dars_remaining_courses + classified["remaining"])
+            ),
+        }
+    )

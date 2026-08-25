@@ -41,6 +41,8 @@ user / CLI / web API / Agent Chat Protocol
   PlannerState (thread_id + run_id)
           |
   retrieve classes
+             |
+ prerequisite agent             <- official UCLA Catalog, deterministic
       /      |       \
  enrollment ratings  grades     <- explicit parallel branches
       \      |       /
@@ -53,10 +55,14 @@ user / CLI / web API / Agent Chat Protocol
         evidence-first report
 ```
 
-The model is used only for optional conversational intake. Retrieval,
-prerequisite filtering, hard constraints, schedule generation, ranking, and
-reporting stay deterministic and testable. Direct planning does not need an
-API key.
+The model is used only for optional conversational intake. The prerequisite
+agent reads the server-rendered data in the
+[official UCLA Catalog](https://catalog.registrar.ucla.edu/), parses enforced
+AND/OR and corequisite groups, and compares them with reviewed completed
+coursework. Missing or ambiguous catalog evidence is never treated as proof of
+eligibility. Retrieval, eligibility, hard constraints, schedule generation,
+ranking, and reporting stay deterministic and testable. Direct planning does
+not need an API key.
 
 ## Fork and run it
 
@@ -92,21 +98,24 @@ npm run build --prefix frontend
 The React application is a complete interface over the same public API used by
 the CLI and Python entrypoint:
 
-1. **DARS:** upload a PDF or paste text, then review the deterministically
-   extracted completed/in-progress courses.
+1. **DARS:** upload a PDF or paste text, then review separately classified
+   completed, in-progress, remaining, and unclassified course codes. Only the
+   completed list unlocks prerequisites.
 2. **Student:** confirm the profile fields DARS supplied and fill any gaps.
    Model-assisted autofill is optional.
 3. **Plan:** choose one published quarter or an academic year. Assign required
-   and preferred courses to each term, select unit ranges, and add schedule and
-   ranking preferences.
+   and preferred courses yourself, or auto-place remaining audit courses in
+   their earliest prerequisite-safe term using the official catalog. Then set
+   unit ranges, schedule constraints, and ranking preferences.
 4. **Results:** compare section-level schedules, evidence freshness, partial
    failures, and downloadable Markdown reports.
 
-In academic-year mode, the top schedule from each term is added to completed
-coursework before the next term runs. That provides real prerequisite
-continuity rather than three unrelated planner requests. Section-level results
-still depend on published UCLA Schedule of Classes data; unpublished future
-terms are clearly returned as partial or failed rather than fabricated.
+In academic-year mode, catalog-based auto-placement respects prerequisite
+order before the run, and the top valid schedule from each term is added to
+completed coursework before the next term runs. Corequisites must appear in
+the same selected schedule or already be complete. Section-level results still
+depend on published UCLA Schedule of Classes data; unpublished future terms
+are clearly returned as partial or failed rather than fabricated.
 
 For frontend development, run the backend and Vite dev server in separate
 terminals. Vite proxies `/api` to FastAPI:
@@ -162,6 +171,14 @@ export MODEL_NAME="asi1"
 
 This optional preset uses ASI:One only as the model API. It does not publish
 the migrated application to ASI:One or Agentverse.
+
+BYOK base URLs must use HTTPS and literal localhost/private-network targets
+are rejected by default so a public fork does not expose an obvious server-side
+request-forgery path. A developer intentionally connecting a local compatible
+model can set `ALLOW_INSECURE_MODEL_BASE_URLS=true` and
+`ALLOW_PRIVATE_MODEL_BASE_URLS=true`; do not enable those flags on a public
+deployment. Production operators should also enforce an outbound hostname
+allowlist at the network layer.
 
 ## Static hosting and GitHub Pages
 
@@ -247,8 +264,12 @@ keep the key only in the user's browser or server-side secret manager.
   base64-encoded `dars_pdf_base64`. The PDF is parsed locally and course codes
   are extracted deterministically before planning.
 - The default local path reads live UCLA classes/current enrollment and public
-  UCLA grade distributions. It caps expansion at 12 courses per department so
-  a first run stays bounded.
+  UCLA grade distributions, plus current official UCLA Catalog descriptions
+  for every candidate's prerequisite check. It caps expansion at 12 courses
+  per department so a first run stays bounded.
+- Enrollment availability is a section-specific heuristic with an explicit
+  confidence label, not a calibrated probability. TBA/unparseable meeting
+  times are surfaced as incomplete conflict checks.
 - Historical quarter lookups and Bruinwalk scraping are opt-in because those
   sources add many slow requests and can require a local Playwright browser:
 
@@ -305,5 +326,6 @@ graph and hard constraints.
 - The old runtime bugs were corrected in the compatibility files: the schedule
   message loop, the grade-distribution early return, the stale term, and the
   committed ASI key.
-- The next production step is a persistent checkpointer plus broader
-  prerequisite-matching and ranking regression coverage.
+- Recommended production follow-ups are a persistent database checkpointer,
+  background jobs with progress/cancellation for long horizons, broader DARS
+  fixture coverage, and calibrated enrollment-risk evaluation.

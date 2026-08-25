@@ -16,6 +16,7 @@ class PlannerState(TypedDict, total=False):
     thread_id: str
     profile: dict[str, Any]
     courses: list[dict[str, Any]]
+    prerequisite_courses: list[dict[str, Any]]
     enrollment_courses: list[dict[str, Any]]
     ratings_courses: list[dict[str, Any]]
     grade_courses: list[dict[str, Any]]

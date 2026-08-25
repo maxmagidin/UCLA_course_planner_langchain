@@ -15,20 +15,13 @@ from typing import Any
 import httpx
 from bs4 import BeautifulSoup
 
+from course_planner.terms import parse_ucla_term
+
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://sa.ucla.edu/ro/public/soc"
 RESULTS_URL = "https://sa.ucla.edu/ro/Public/SOC/Results"
 COURSE_SUMMARY_URL = f"{RESULTS_URL}/GetCourseSummary"
-
-# Mapping quarter strings to the term codes UCLA uses.
-# Pattern: year + quarter letter, e.g. "25F" for Fall 2025.
-_QUARTER_CODES = {
-    "winter": "W",
-    "spring": "S",
-    "summer": "1",   # Summer Session A; adjust as needed
-    "fall":   "F",
-}
 
 # Shared client headers to mimic a browser request.
 _HEADERS = {
@@ -44,13 +37,7 @@ _HEADERS = {
 
 def _term_code(quarter: str) -> str:
     """Convert e.g. 'Fall 2025' -> '25F'."""
-    parts = quarter.strip().split()
-    if len(parts) == 2:
-        season, year = parts[0].lower(), parts[1]
-        short_year = year[-2:]
-        code = _QUARTER_CODES.get(season, "F")
-        return f"{short_year}{code}"
-    return quarter
+    return parse_ucla_term(quarter).soc_code
 
 
 def _parse_time(raw: str) -> tuple[str, str]:
@@ -72,7 +59,9 @@ def _element_text(element) -> str:
     if element is None:
         return ""
     return " ".join(
-        str(value).strip() for value in element.find_all(string=True) if str(value).strip()
+        str(value).strip()
+        for value in element.find_all(string=True)
+        if str(value).strip()
     )
 
 
@@ -97,7 +86,11 @@ def _parse_course_titles(html: str, department: str) -> list[dict[str, Any]]:
         path = str(row.get("id", ""))
         model = models.get(path)
         button = row.select_one("[id$='-title']")
-        label = str(button.string).strip() if button and button.string else _element_text(button)
+        label = (
+            str(button.string).strip()
+            if button and button.string
+            else _element_text(button)
+        )
         if not model or " - " not in label:
             continue
         catalog, title = label.split(" - ", 1)
@@ -119,7 +112,9 @@ def _section_type(section_id: str) -> str:
     return "lecture"
 
 
-def _parse_section_rows(html: str, *, parent_section_id: str = "") -> list[dict[str, Any]]:
+def _parse_section_rows(
+    html: str, *, parent_section_id: str = ""
+) -> list[dict[str, Any]]:
     """Parse section rows returned by ``GetCourseSummary``."""
     soup = BeautifulSoup(html, "html.parser")
     sections: list[dict[str, Any]] = []
@@ -128,7 +123,11 @@ def _parse_section_rows(html: str, *, parent_section_id: str = "") -> list[dict[
         section_link = section_cell.select_one("a") if section_cell else None
         section_id = _element_text(section_link)
         if not section_id:
-            match = re.search(r"\b(?:Lec|Dis|Lab|Sem|Tut)\s*\w+", _element_text(section_cell), re.IGNORECASE)
+            match = re.search(
+                r"\b(?:Lec|Dis|Lab|Sem|Tut)\s*\w+",
+                _element_text(section_cell),
+                re.IGNORECASE,
+            )
             section_id = match.group(0) if match else ""
         if not section_id:
             continue
@@ -141,10 +140,14 @@ def _parse_section_rows(html: str, *, parent_section_id: str = "") -> list[dict[
         start_time, end_time = _parse_time(time_text)
         status_text = _element_text(row.select_one(".statusColumn"))
         waitlist_text = _element_text(row.select_one(".waitlistColumn"))
-        enrolled_match = re.search(r"(\d+)\s+(?:of|/)\s+(\d+)\s+Enrolled", status_text, re.IGNORECASE)
+        enrolled_match = re.search(
+            r"(\d+)\s+(?:of|/)\s+(\d+)\s+Enrolled", status_text, re.IGNORECASE
+        )
         if not enrolled_match:
             enrolled_match = re.search(r"(\d+)\s*/\s*(\d+)", status_text)
-        waitlist_match = re.search(r"(\d+)\s+(?:of|/)\s+(\d+)\s+Taken", waitlist_text, re.IGNORECASE)
+        waitlist_match = re.search(
+            r"(\d+)\s+(?:of|/)\s+(\d+)\s+Taken", waitlist_text, re.IGNORECASE
+        )
         if not waitlist_match:
             waitlist_match = re.search(r"(\d+)\s*/\s*(\d+)", waitlist_text)
 
@@ -157,7 +160,9 @@ def _parse_section_rows(html: str, *, parent_section_id: str = "") -> list[dict[
         elif "hybrid" in row_text:
             section_format = "hybrid"
 
-        units_match = re.search(r"\d+(?:\.\d+)?", _element_text(row.select_one(".unitsColumn")))
+        units_match = re.search(
+            r"\d+(?:\.\d+)?", _element_text(row.select_one(".unitsColumn"))
+        )
         sections.append(
             {
                 "section_id": section_id,
@@ -170,7 +175,9 @@ def _parse_section_rows(html: str, *, parent_section_id: str = "") -> list[dict[
                 "enrolled": int(enrolled_match.group(1)) if enrolled_match else 0,
                 "capacity": int(enrolled_match.group(2)) if enrolled_match else 0,
                 "waitlist": int(waitlist_match.group(1)) if waitlist_match else 0,
-                "waitlist_capacity": int(waitlist_match.group(2)) if waitlist_match else 0,
+                "waitlist_capacity": int(waitlist_match.group(2))
+                if waitlist_match
+                else 0,
                 "format": section_format,
                 "section_type": _section_type(section_id),
                 "units": float(units_match.group(0)) if units_match else None,
@@ -183,7 +190,11 @@ def _parse_section_rows(html: str, *, parent_section_id: str = "") -> list[dict[
 def _extract_sections_from_html(html: str) -> list[dict]:
     """Backward-compatible section-fragment parser used by legacy callers."""
     return [
-        {key: value for key, value in section.items() if not key.startswith("_") and key != "units"}
+        {
+            key: value
+            for key, value in section.items()
+            if not key.startswith("_") and key != "units"
+        }
         for section in _parse_section_rows(html)
     ]
 
@@ -201,7 +212,9 @@ def get_available_departments(quarter: str = "Fall 2025") -> list[str]:
     term = _term_code(quarter)
     params = {"t": term}
     try:
-        with httpx.Client(headers=_HEADERS, timeout=30, follow_redirects=True) as client:
+        with httpx.Client(
+            headers=_HEADERS, timeout=30, follow_redirects=True
+        ) as client:
             resp = client.get(BASE_URL, params=params)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -211,7 +224,12 @@ def get_available_departments(quarter: str = "Fall 2025") -> list[str]:
             for opt in soup.select("option"):
                 val = (opt.get("value") or "").strip()
                 label = opt.get_text(strip=True)
-                if val and label and val != "0" and not re.fullmatch(r"\d{2}[FWS12]", val):
+                if (
+                    val
+                    and label
+                    and val != "0"
+                    and not re.fullmatch(r"\d{2}[FWS12]", val)
+                ):
                     depts.append(label)
             if depts:
                 return depts
@@ -226,7 +244,9 @@ def get_available_departments(quarter: str = "Fall 2025") -> list[str]:
             if match:
                 items = json.loads(html_lib.unescape(match.group(1)))
                 return [
-                    str(item.get("label") or item.get("text") or item.get("value", "")).strip()
+                    str(
+                        item.get("label") or item.get("text") or item.get("value", "")
+                    ).strip()
                     for item in items
                     if isinstance(item, dict)
                 ]
@@ -269,25 +289,42 @@ def scrape_quarter_courses(
     courses: list[dict] = []
 
     try:
-        with httpx.Client(headers=_HEADERS, timeout=30, follow_redirects=True) as client:
+        with httpx.Client(
+            headers=_HEADERS, timeout=30, follow_redirects=True
+        ) as client:
             # The initial request establishes the ASP.NET session required by
             # every expandable-course request that follows.
             resp = client.get(RESULTS_URL, params=params)
             resp.raise_for_status()
             if "/error/" in str(resp.url).lower():
-                raise RuntimeError(f"UCLA SOC redirected the {subj} search to an error page")
+                raise RuntimeError(
+                    f"UCLA SOC redirected the {subj} search to an error page"
+                )
 
             title_rows = _parse_course_titles(resp.text, subj)
-            requested = {" ".join(code.upper().split()) for code in (course_codes or [])}
-            title_rows.sort(key=lambda item: (item["course_code"] not in requested, item["course_code"]))
+            requested = {
+                " ".join(code.upper().split()) for code in (course_codes or [])
+            }
+            title_rows.sort(
+                key=lambda item: (
+                    item["course_code"] not in requested,
+                    item["course_code"],
+                )
+            )
             if max_courses is not None and max_courses >= 0:
-                explicit = [item for item in title_rows if item["course_code"] in requested]
-                others = [item for item in title_rows if item["course_code"] not in requested]
+                explicit = [
+                    item for item in title_rows if item["course_code"] in requested
+                ]
+                others = [
+                    item for item in title_rows if item["course_code"] not in requested
+                ]
                 title_rows = explicit + others[: max(0, max_courses - len(explicit))]
 
             for item in title_rows:
                 try:
-                    detail = _get_course_summary(client, item["model"], referer=str(resp.url))
+                    detail = _get_course_summary(
+                        client, item["model"], referer=str(resp.url)
+                    )
                     primary_sections = _parse_section_rows(detail)
                     detail_models = _course_models(detail)
                     sections = list(primary_sections)
@@ -298,7 +335,9 @@ def scrape_quarter_courses(
                         child_model = detail_models.get(primary["_path"])
                         if not child_model:
                             continue
-                        child_html = _get_course_summary(client, child_model, referer=str(resp.url))
+                        child_html = _get_course_summary(
+                            client, child_model, referer=str(resp.url)
+                        )
                         sections.extend(
                             _parse_section_rows(
                                 child_html,
@@ -307,7 +346,11 @@ def scrape_quarter_courses(
                         )
 
                     units = next(
-                        (float(section["units"]) for section in primary_sections if section.get("units") is not None),
+                        (
+                            float(section["units"])
+                            for section in primary_sections
+                            if section.get("units") is not None
+                        ),
                         4.0,
                     )
                     cleaned_sections = [
@@ -360,7 +403,9 @@ def _get_course_summary(
     )
     response.raise_for_status()
     if "/error/" in str(response.url).lower():
-        raise RuntimeError("UCLA SOC course detail request was redirected to an error page")
+        raise RuntimeError(
+            "UCLA SOC course detail request was redirected to an error page"
+        )
     return response.text
 
 
@@ -406,8 +451,7 @@ def scrape_historical_enrollment(course_code: str) -> list[dict]:
     Schedule of Classes archive.
 
     Returns up to 8 past quarters of data, each dict containing:
-        quarter, enrollment_day_1, enrollment_day_7, final_enrollment,
-        capacity, went_to_waitlist
+        quarter, final_enrollment, capacity, went_to_waitlist, snapshot_type
     """
     quarters = _recent_quarters(8)
     # Normalize course code for URL matching
@@ -419,7 +463,9 @@ def scrape_historical_enrollment(course_code: str) -> list[dict]:
     for qtr in quarters:
         term = _term_code(qtr)
         try:
-            with httpx.Client(headers=_HEADERS, timeout=20, follow_redirects=True) as client:
+            with httpx.Client(
+                headers=_HEADERS, timeout=20, follow_redirects=True
+            ) as client:
                 # Try the archive page for this quarter
                 resp = client.get(
                     ARCHIVE_URL,
@@ -436,8 +482,10 @@ def scrape_historical_enrollment(course_code: str) -> list[dict]:
                     # Try the SOC for the archived quarter directly
                     archived = scrape_quarter_courses(qtr, dept)
                     matching = [
-                        c for c in archived
-                        if " ".join(c.get("course_code", "").upper().split()) == code_norm
+                        c
+                        for c in archived
+                        if " ".join(c.get("course_code", "").upper().split())
+                        == code_norm
                     ]
                     if not matching:
                         continue
@@ -452,11 +500,10 @@ def scrape_historical_enrollment(course_code: str) -> list[dict]:
                         results.append(
                             {
                                 "quarter": qtr,
-                                "enrollment_day_1": int(enrolled * 0.55),
-                                "enrollment_day_7": int(enrolled * 0.85),
                                 "final_enrollment": enrolled,
                                 "capacity": cap,
                                 "went_to_waitlist": wl > 0,
+                                "snapshot_type": "final",
                             }
                         )
                     continue
@@ -480,11 +527,10 @@ def scrape_historical_enrollment(course_code: str) -> list[dict]:
                     results.append(
                         {
                             "quarter": qtr,
-                            "enrollment_day_1": int(enrolled * 0.55),
-                            "enrollment_day_7": int(enrolled * 0.85),
                             "final_enrollment": enrolled,
                             "capacity": cap,
                             "went_to_waitlist": wl > 0 or enrolled >= cap,
+                            "snapshot_type": "final",
                         }
                     )
 

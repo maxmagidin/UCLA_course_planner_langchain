@@ -1,12 +1,29 @@
 from __future__ import annotations
 
+import pytest
+
 import course_planner.graph as graph_module
-from course_planner.documents import extract_course_codes
+from course_planner.documents import classify_dars_courses, extract_course_codes
 from course_planner.graph import run_planner
 from course_planner.model_provider import create_chat_model
 from course_planner.planner_models import ModelConfig, StudentProfile
 from course_planner.ranking import rank_schedules
 from course_planner.utils import ScheduleCandidate
+
+
+@pytest.fixture(autouse=True)
+def catalog_without_requisites(monkeypatch):
+    monkeypatch.setattr(
+        graph_module,
+        "fetch_catalog_course",
+        lambda code, year: {
+            "course_code": code,
+            "title": code,
+            "description": "Lecture, four hours. Letter grading.",
+            "catalog_year": year,
+            "catalog_url": f"https://catalog.registrar.ucla.edu/course/{year}/TEST",
+        },
+    )
 
 
 def _profile() -> StudentProfile:
@@ -47,44 +64,85 @@ def test_model_provider_uses_generic_openai_compatible_settings(monkeypatch):
 
 
 def test_model_provider_accepts_transient_byok_config():
-    model = create_chat_model(config=ModelConfig(
-        provider="openai_compatible",
-        api_key="request-only-key",
-        base_url="https://provider.example/v1",
-        model="request-model",
-    ))
+    model = create_chat_model(
+        config=ModelConfig(
+            provider="openai_compatible",
+            api_key="request-only-key",
+            base_url="https://provider.example/v1",
+            model="request-model",
+        )
+    )
     assert model.model_name == "request-model"
 
 
+def test_byok_rejects_private_or_insecure_base_urls():
+    for base_url in ("http://provider.example/v1", "https://127.0.0.1/v1"):
+        with pytest.raises(ValueError):
+            ModelConfig(api_key="test", base_url=base_url, model="test")
+
+
 def test_dars_course_code_extraction():
-    assert extract_course_codes("COURSES COMPLETED: COM SCI 31, MATH 31A and ENGL 3") == [
-        "COM SCI 31", "ENGL 3", "MATH 31A"
-    ]
+    assert extract_course_codes(
+        "COURSES COMPLETED: COM SCI 31, MATH 31A and ENGL 3"
+    ) == ["COM SCI 31", "ENGL 3", "MATH 31A"]
+
+
+def test_dars_classification_does_not_count_remaining_courses_as_completed():
+    classified = classify_dars_courses("""
+COURSES COMPLETED
+COM SCI 31 A
+COM SCI 32 B+
+IN PROGRESS
+COM SCI 35L IP
+STILL NEEDED
+COM SCI 111
+Unlabelled: MATH 61
+""")
+
+    assert classified["completed"] == ["COM SCI 31", "COM SCI 32"]
+    assert classified["in_progress"] == ["COM SCI 35L"]
+    assert classified["remaining"] == ["COM SCI 111", "MATH 61"]
 
 
 def test_graph_joins_parallel_enrichment(monkeypatch):
     raw = []
-    for index, (start, end) in enumerate((("9:00am", "9:50am"), ("10:00am", "10:50am"), ("11:00am", "11:50am")), 1):
-        raw.append({
-            "course_code": f"COM SCI {100 + index}",
-            "title": f"Course {index}",
-            "units": 4,
-            "description": "",
-            "sections": [{
-                "section_id": f"{index}A", "days": "MWF", "start_time": start,
-                "end_time": end, "location": "", "instructor": f"Professor {index}",
-                "capacity": 100, "enrolled": 20, "format": "in-person",
-                "section_type": "lecture",
-            }],
-        })
+    for index, (start, end) in enumerate(
+        (("9:00am", "9:50am"), ("10:00am", "10:50am"), ("11:00am", "11:50am")), 1
+    ):
+        raw.append(
+            {
+                "course_code": f"COM SCI {100 + index}",
+                "title": f"Course {index}",
+                "units": 4,
+                "description": "",
+                "sections": [
+                    {
+                        "section_id": f"{index}A",
+                        "days": "MWF",
+                        "start_time": start,
+                        "end_time": end,
+                        "location": "",
+                        "instructor": f"Professor {index}",
+                        "capacity": 100,
+                        "enrolled": 20,
+                        "format": "in-person",
+                        "section_type": "lecture",
+                    }
+                ],
+            }
+        )
     monkeypatch.setattr(
         graph_module,
         "scrape_quarter_courses",
         lambda term, department, **kwargs: raw,
     )
-    monkeypatch.setattr(graph_module, "scrape_historical_enrollment", lambda course_code: [])
+    monkeypatch.setattr(
+        graph_module, "scrape_historical_enrollment", lambda course_code: []
+    )
     monkeypatch.setattr(graph_module, "scrape_course_ratings", lambda course_code: None)
-    monkeypatch.setattr(graph_module, "scrape_professor_ratings", lambda instructor, course_code: None)
+    monkeypatch.setattr(
+        graph_module, "scrape_professor_ratings", lambda instructor, course_code: None
+    )
     monkeypatch.setattr(graph_module, "load_grade_data", dict)
 
     result = run_planner(_profile(), thread_id="test-join")
@@ -99,18 +157,28 @@ def test_graph_joins_parallel_enrichment(monkeypatch):
 
 
 def test_missing_required_courses_fail_instead_of_silently_planning(monkeypatch):
-    raw = [{
-        "course_code": "COM SCI 101",
-        "title": "Available course",
-        "units": 4,
-        "description": "",
-        "sections": [{
-            "section_id": "Lec 1", "days": "MWF", "start_time": "9am",
-            "end_time": "9:50am", "location": "", "instructor": "Professor",
-            "capacity": 100, "enrolled": 20, "format": "in-person",
-            "section_type": "lecture",
-        }],
-    }]
+    raw = [
+        {
+            "course_code": "COM SCI 101",
+            "title": "Available course",
+            "units": 4,
+            "description": "",
+            "sections": [
+                {
+                    "section_id": "Lec 1",
+                    "days": "MWF",
+                    "start_time": "9am",
+                    "end_time": "9:50am",
+                    "location": "",
+                    "instructor": "Professor",
+                    "capacity": 100,
+                    "enrolled": 20,
+                    "format": "in-person",
+                    "section_type": "lecture",
+                }
+            ],
+        }
+    ]
     monkeypatch.setattr(
         graph_module,
         "scrape_quarter_courses",
@@ -126,25 +194,38 @@ def test_missing_required_courses_fail_instead_of_silently_planning(monkeypatch)
 
 
 def test_impossible_constraints_fail_instead_of_reporting_completed(monkeypatch):
-    raw = [{
-        "course_code": code,
-        "title": code,
-        "units": 4,
-        "description": "",
-        "sections": [{
-            "section_id": "Lec 1", "days": "MWF", "start_time": "9am",
-            "end_time": "9:50am", "location": "", "instructor": "Professor",
-            "capacity": 100, "enrolled": 20, "format": "in-person",
-            "section_type": "lecture",
-        }],
-    } for code in ("COM SCI 101", "COM SCI 102", "COM SCI 103")]
+    raw = [
+        {
+            "course_code": code,
+            "title": code,
+            "units": 4,
+            "description": "",
+            "sections": [
+                {
+                    "section_id": "Lec 1",
+                    "days": "MWF",
+                    "start_time": "9am",
+                    "end_time": "9:50am",
+                    "location": "",
+                    "instructor": "Professor",
+                    "capacity": 100,
+                    "enrolled": 20,
+                    "format": "in-person",
+                    "section_type": "lecture",
+                }
+            ],
+        }
+        for code in ("COM SCI 101", "COM SCI 102", "COM SCI 103")
+    ]
     monkeypatch.setattr(
         graph_module,
         "scrape_quarter_courses",
         lambda term, department, **kwargs: raw,
     )
     monkeypatch.setenv("PLANNER_ENABLE_GRADES", "false")
-    profile = _profile().model_copy(update={"hard_constraints": ["No classes before 10am"]})
+    profile = _profile().model_copy(
+        update={"hard_constraints": ["No classes before 10am"]}
+    )
 
     result = run_planner(profile, thread_id="test-no-valid-schedule")
 

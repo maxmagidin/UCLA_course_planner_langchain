@@ -81,9 +81,17 @@ def _parse_constraints(profile: StudentProfile) -> dict:
     for constraint in profile.hard_constraints or []:
         lowered = constraint.lower().strip()
         for day_name in (
-            "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
         ):
-            if day_name in lowered and any(word in lowered for word in ("off", "no", "free")):
+            if day_name in lowered and any(
+                word in lowered for word in ("off", "no", "free")
+            ):
                 days_off.add(day_name.capitalize())
 
         match = re.search(
@@ -161,18 +169,36 @@ def _course_combinations(
     profile: StudentProfile,
 ) -> list[list[tuple[CourseOption, list[list[Section]]]]]:
     eligible = [course for course in courses if course.prerequisites_met]
-    required = [(course, group_sections(course)) for course in eligible if course.is_required]
-    optional = [(course, group_sections(course)) for course in eligible if not course.is_required]
+    required = [
+        (course, group_sections(course)) for course in eligible if course.is_required
+    ]
+    optional = [
+        (course, group_sections(course))
+        for course in eligible
+        if not course.is_required
+    ]
     required = [(course, options) for course, options in required if options]
     optional = [(course, options) for course, options in optional if options]
     required_units = sum(course.units for course, _ in required)
 
     combinations: list[list[tuple[CourseOption, list[list[Section]]]]] = []
+    completed = {item.upper() for item in profile.dars_courses}
     for count in range(min(len(optional), 6) + 1):
         for subset in itertools.combinations(optional, count):
+            combination = required + list(subset)
+            selected = {course.course_code.upper() for course, _ in combination}
+            if any(
+                not any(
+                    option.upper() in completed or option.upper() in selected
+                    for option in group
+                )
+                for course, _ in combination
+                for group in course.corequisite_groups
+            ):
+                continue
             units = required_units + sum(course.units for course, _ in subset)
             if profile.min_units <= units <= profile.max_units:
-                combinations.append(required + list(subset))
+                combinations.append(combination)
             if len(combinations) >= 500:
                 return combinations
     return combinations
@@ -197,22 +223,36 @@ def _valid_section_pick(
             for day, start, end in blocks:
                 if day in constraints["days_off"]:
                     return None
-                if constraints["no_before"] is not None and start < constraints["no_before"]:
+                if (
+                    constraints["no_before"] is not None
+                    and start < constraints["no_before"]
+                ):
                     return None
-                if constraints["no_after"] is not None and end > constraints["no_after"]:
+                if (
+                    constraints["no_after"] is not None
+                    and end > constraints["no_after"]
+                ):
                     return None
             all_blocks.extend(blocks)
             if section.section_type.lower() in {"discussion", "dis", "lab", "tut"}:
                 discussion_id = section.section_id
             else:
                 lecture_id = section.section_id
-        course_infos.append({
-            "course_code": course.course_code,
-            "title": course.title,
-            "units": course.units,
-            "lecture_section_id": lecture_id,
-            "discussion_section_id": discussion_id,
-        })
+        course_infos.append(
+            {
+                "course_code": course.course_code,
+                "title": course.title,
+                "units": course.units,
+                "lecture_section_id": lecture_id,
+                "discussion_section_id": discussion_id,
+                "prerequisite_status": course.prerequisite_status,
+                "prerequisite_summary": course.prerequisite_summary,
+                "catalog_url": course.catalog_url,
+                "meeting_times_verified": all(
+                    _section_time_blocks(section) for section in sections
+                ),
+            }
+        )
     return course_infos, all_blocks
 
 
@@ -224,21 +264,25 @@ def _day_schedules(
     for course, sections in section_pick:
         for section in sections:
             for day, start, end in _section_time_blocks(section):
-                blocks_by_day.setdefault(day, []).append((
-                    start,
-                    end,
-                    course.course_code,
-                    section.section_id,
-                    section.instructor,
-                    section.location,
-                ))
+                blocks_by_day.setdefault(day, []).append(
+                    (
+                        start,
+                        end,
+                        course.course_code,
+                        section.section_id,
+                        section.instructor,
+                        section.location,
+                    )
+                )
 
     schedules: list[DaySchedule] = []
     total_gap = 0
     max_consecutive = 0
     for day, blocks in sorted(blocks_by_day.items()):
         blocks.sort()
-        gaps = [blocks[index][0] - blocks[index - 1][1] for index in range(1, len(blocks))]
+        gaps = [
+            blocks[index][0] - blocks[index - 1][1] for index in range(1, len(blocks))
+        ]
         if constraints["max_gap"] is not None and any(
             gap > constraints["max_gap"] for gap in gaps
         ):
@@ -254,26 +298,34 @@ def _day_schedules(
                     longest = max(longest, streak_end - streak_start)
                     streak_start, streak_end = block[0], block[1]
             longest = max(longest, streak_end - streak_start)
-        if constraints["max_consecutive"] is not None and longest > constraints["max_consecutive"]:
+        if (
+            constraints["max_consecutive"] is not None
+            and longest > constraints["max_consecutive"]
+        ):
             return None
 
         positive_gap = sum(gap for gap in gaps if gap > 0)
         total_gap += positive_gap
         max_consecutive = max(max_consecutive, longest)
-        schedules.append(DaySchedule(
-            day=day,
-            sections=[{
-                "course_code": course_code,
-                "section_id": section_id,
-                "start_min": start,
-                "end_min": end,
-                "instructor": instructor,
-                "location": location,
-            } for start, end, course_code, section_id, instructor, location in blocks],
-            total_minutes=sum(end - start for start, end, *_ in blocks),
-            gap_minutes=positive_gap,
-            max_consecutive_minutes=longest,
-        ))
+        schedules.append(
+            DaySchedule(
+                day=day,
+                sections=[
+                    {
+                        "course_code": course_code,
+                        "section_id": section_id,
+                        "start_min": start,
+                        "end_min": end,
+                        "instructor": instructor,
+                        "location": location,
+                    }
+                    for start, end, course_code, section_id, instructor, location in blocks
+                ],
+                total_minutes=sum(end - start for start, end, *_ in blocks),
+                gap_minutes=positive_gap,
+                max_consecutive_minutes=longest,
+            )
+        )
 
     average_gap = total_gap / len(schedules) if schedules else 0.0
     return schedules, average_gap, max_consecutive
@@ -316,14 +368,34 @@ def generate_schedules(
             ratings: list[float] = []
             grades: list[float] = []
             workloads: list[float] = []
-            for course, _ in section_pick:
-                if course.enrollment_prediction:
-                    enrollment.append(course.enrollment_prediction.chance_open_at_pass)
-                if course.bruinwalk_composite_score is not None:
+            for course, sections in section_pick:
+                section_availability = [
+                    section.availability_score
+                    for section in sections
+                    if section.availability_score is not None
+                ]
+                if section_availability:
+                    enrollment.append(min(section_availability))
+                section_ratings = [
+                    section.professor_rating
+                    for section in sections
+                    if section.professor_rating is not None
+                ]
+                if section_ratings:
+                    ratings.append(sum(section_ratings) / len(section_ratings))
+                elif course.bruinwalk_composite_score is not None:
                     ratings.append(course.bruinwalk_composite_score)
-                if course.grade_distribution and course.grade_distribution.avg_gpa > 0:
-                    grades.append(course.grade_distribution.avg_gpa)
-                if course.course_ratings and course.course_ratings.avg_hours_per_week is not None:
+                section_grades = [
+                    section.avg_gpa
+                    for section in sections
+                    if section.avg_gpa is not None
+                ]
+                if section_grades:
+                    grades.append(sum(section_grades) / len(section_grades))
+                if (
+                    course.course_ratings
+                    and course.course_ratings.avg_hours_per_week is not None
+                ):
                     workloads.append(course.course_ratings.avg_hours_per_week)
 
             days_on_campus = len(day_schedules)
@@ -332,27 +404,44 @@ def generate_schedules(
                 + _clamp(1 - days_on_campus / 5) * 0.3
                 + _clamp(1 - max_consecutive / 300) * 0.3
             )
-            candidates.append(ScheduleCandidate(
-                courses=course_infos,
-                day_schedules=day_schedules,
-                total_units=sum(course["units"] for course in course_infos),
-                days_on_campus=days_on_campus,
-                avg_gap_minutes_per_day=round(average_gap, 1),
-                max_consecutive_minutes_any_day=max_consecutive,
-                avg_enrollment_chance=round(sum(enrollment) / len(enrollment), 4) if enrollment else 0.0,
-                min_enrollment_chance=round(min(enrollment), 4) if enrollment else 1.0,
-                avg_bruinwalk_composite=round(sum(ratings) / len(ratings), 4) if ratings else None,
-                avg_gpa=round(sum(grades) / len(grades), 3) if grades else None,
-                min_gpa=round(min(grades), 3) if grades else None,
-                avg_workload_hours_per_week=round(sum(workloads) / len(workloads), 1) if workloads else None,
-                schedule_quality_score=round(quality, 4),
-            ))
+            candidates.append(
+                ScheduleCandidate(
+                    courses=course_infos,
+                    day_schedules=day_schedules,
+                    total_units=sum(course["units"] for course in course_infos),
+                    days_on_campus=days_on_campus,
+                    avg_gap_minutes_per_day=round(average_gap, 1),
+                    max_consecutive_minutes_any_day=max_consecutive,
+                    avg_enrollment_chance=round(sum(enrollment) / len(enrollment), 4)
+                    if enrollment
+                    else 0.0,
+                    min_enrollment_chance=round(min(enrollment), 4)
+                    if enrollment
+                    else 1.0,
+                    avg_bruinwalk_composite=round(sum(ratings) / len(ratings), 4)
+                    if ratings
+                    else None,
+                    avg_gpa=round(sum(grades) / len(grades), 3) if grades else None,
+                    min_gpa=round(min(grades), 3) if grades else None,
+                    avg_workload_hours_per_week=round(
+                        sum(workloads) / len(workloads), 1
+                    )
+                    if workloads
+                    else None,
+                    schedule_quality_score=round(quality, 4),
+                    has_unverified_meeting_times=any(
+                        not course["meeting_times_verified"] for course in course_infos
+                    ),
+                )
+            )
             if len(candidates) >= MAX_CANDIDATES * 10:
                 break
         if len(candidates) >= MAX_CANDIDATES * 10:
             break
 
-    candidates.sort(key=lambda candidate: candidate.schedule_quality_score, reverse=True)
+    candidates.sort(
+        key=lambda candidate: candidate.schedule_quality_score, reverse=True
+    )
     return candidates[:MAX_CANDIDATES]
 
 

@@ -16,6 +16,7 @@ T = TypeVar("T")
 # Model classes (originally from models.py, consolidated here)
 # ---------------------------------------------------------------------------
 
+
 class YearLevel(str, Enum):
     FRESHMAN = "freshman"
     SOPHOMORE = "sophomore"
@@ -42,6 +43,8 @@ class StudentProfile:
     term: str = ""
     dars_text: str | None = None
     dars_courses: list[str] = field(default_factory=list)
+    dars_in_progress_courses: list[str] = field(default_factory=list)
+    dars_remaining_courses: list[str] = field(default_factory=list)
     required_courses: list[str] = field(default_factory=list)
     preferred_courses: list[str] = field(default_factory=list)
     hard_constraints: list[str] = field(default_factory=list)
@@ -71,6 +74,11 @@ class Section:
     waitlist_capacity: int = 0
     format: str = "in-person"
     section_type: str = "lecture"  # "lecture", "discussion", "lab"
+    availability_score: float | None = None
+    availability_confidence: str = "low"
+    professor_rating: float | None = None
+    avg_gpa: float | None = None
+    workload_hours_per_week: float | None = None
 
 
 @dataclass
@@ -150,6 +158,12 @@ class CourseOption:
     description: str = ""
     sections: list[Section] = field(default_factory=list)
     prerequisites_met: bool = True
+    prerequisite_status: str = "unknown"
+    prerequisite_summary: str = "Prerequisites have not been checked."
+    prerequisite_groups: list[dict] = field(default_factory=list)
+    missing_prerequisite_groups: list[list[str]] = field(default_factory=list)
+    corequisite_groups: list[list[str]] = field(default_factory=list)
+    catalog_url: str = ""
     is_required: bool = False
     is_preferred: bool = False
     enrollment_prediction: EnrollmentPrediction | None = None
@@ -197,6 +211,7 @@ class ScheduleCandidate:
     violates_max_gap: bool = False
     violates_max_consecutive: bool = False
     violates_format_preference: bool = False
+    has_unverified_meeting_times: bool = False
 
 
 @dataclass
@@ -227,6 +242,7 @@ class PlannerReport:
 # Serialization / Deserialization
 # ---------------------------------------------------------------------------
 
+
 class _EnumEncoder(json.JSONEncoder):
     """JSON encoder that serializes Enum members as their `.value`."""
 
@@ -251,12 +267,15 @@ def deserialize(json_str: str, cls: type[T]) -> T:
     cast from their raw values.
     """
     data = json.loads(json_str)
-    return dacite.from_dict(data_class=cls, data=data, config=dacite.Config(cast=[Enum]))
+    return dacite.from_dict(
+        data_class=cls, data=data, config=dacite.Config(cast=[Enum])
+    )
 
 
 # ---------------------------------------------------------------------------
 # PDF extraction
 # ---------------------------------------------------------------------------
+
 
 def extract_pdf_text(base64_str: str) -> str:
     """Decode a base64-encoded PDF and extract all text via *pdfplumber*."""
@@ -275,12 +294,12 @@ def extract_pdf_text(base64_str: str) -> str:
 # ---------------------------------------------------------------------------
 
 AGENT_ADDRESSES = {
-    "input":             "agent1qvzm8976yty6m5zvtfpdhp55mxy0qdf6mhhzc557tvgs4gwv85ck6g7qpng",
+    "input": "agent1qvzm8976yty6m5zvtfpdhp55mxy0qdf6mhhzc557tvgs4gwv85ck6g7qpng",
     "available_classes": "agent1qdq95wua88u00p6v5ae0qvl75gu3fplenxf58yhje8h6dgkmgdek29ghs4g",
-    "enrollment":        "agent1q084cz3farmdfqmzllwn2nhtz5u5yty3p07xt63nuleaj0e7207jcgekvqr",
-    "bruinwalk":         "agent1qwacpk27n6g60d8za7xg5s527fn84lphm0vgvdxa9f56fy0cpp20gum0d46",
-    "grade_dist":        "agent1qwy2uv9h7r54w6dxmy20vvg5tthekglay9hu3czscjdqjnqa9560qcylll9",
-    "schedule":          "agent1q00ey3trf2yzmkrgcuzty3sw03qmjk8lct56s42cke5cz7aa5tcusccs8wu",
-    "ranking":           "agent1qvh2j5fll03v0ujv5l8v046jjevddetmyh0m2huszpy0ksag6wy9gz4vu8f",
-    "report":            "agent1qdnzpjfwy5ymwsf9whag9vefg3m72lrzptpzs0l86re0caj4kargz07se9g",
+    "enrollment": "agent1q084cz3farmdfqmzllwn2nhtz5u5yty3p07xt63nuleaj0e7207jcgekvqr",
+    "bruinwalk": "agent1qwacpk27n6g60d8za7xg5s527fn84lphm0vgvdxa9f56fy0cpp20gum0d46",
+    "grade_dist": "agent1qwy2uv9h7r54w6dxmy20vvg5tthekglay9hu3czscjdqjnqa9560qcylll9",
+    "schedule": "agent1q00ey3trf2yzmkrgcuzty3sw03qmjk8lct56s42cke5cz7aa5tcusccs8wu",
+    "ranking": "agent1qvh2j5fll03v0ujv5l8v046jjevddetmyh0m2huszpy0ksag6wy9gz4vu8f",
+    "report": "agent1qdnzpjfwy5ymwsf9whag9vefg3m72lrzptpzs0l86re0caj4kargz07se9g",
 }

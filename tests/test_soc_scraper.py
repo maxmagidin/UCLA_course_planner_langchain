@@ -44,23 +44,25 @@ def test_parses_current_ucla_section_shape():
 
     sections = _parse_section_rows(html)
 
-    assert sections == [{
-        "section_id": "Lec 1",
-        "parent_section_id": "",
-        "days": "MW",
-        "start_time": "12pm",
-        "end_time": "1:50pm",
-        "location": "Engineering VI",
-        "instructor": "Smallberg, D.A.",
-        "enrolled": 153,
-        "capacity": 237,
-        "waitlist": 1,
-        "waitlist_capacity": 40,
-        "format": "in-person",
-        "section_type": "lecture",
-        "units": 4.0,
-        "_path": "187093200_COMSCI0031",
-    }]
+    assert sections == [
+        {
+            "section_id": "Lec 1",
+            "parent_section_id": "",
+            "days": "MW",
+            "start_time": "12pm",
+            "end_time": "1:50pm",
+            "location": "Engineering VI",
+            "instructor": "Smallberg, D.A.",
+            "enrolled": 153,
+            "capacity": 237,
+            "waitlist": 1,
+            "waitlist_capacity": 40,
+            "format": "in-person",
+            "section_type": "lecture",
+            "units": 4.0,
+            "_path": "187093200_COMSCI0031",
+        }
+    ]
 
 
 def test_noon_times_and_parent_section_pairing():
@@ -75,12 +77,32 @@ def test_noon_times_and_parent_section_pairing():
         sections=[
             Section("Lec 1", "MW", "12pm", "1:50pm", "", "Professor"),
             Section("Lec 2", "MW", "4pm", "5:50pm", "", "Professor"),
-            Section("Dis 1A", "F", "10am", "11:50am", "", "TA", parent_section_id="Lec 1", section_type="discussion"),
-            Section("Dis 2A", "F", "2pm", "3:50pm", "", "TA", parent_section_id="Lec 2", section_type="discussion"),
+            Section(
+                "Dis 1A",
+                "F",
+                "10am",
+                "11:50am",
+                "",
+                "TA",
+                parent_section_id="Lec 1",
+                section_type="discussion",
+            ),
+            Section(
+                "Dis 2A",
+                "F",
+                "2pm",
+                "3:50pm",
+                "",
+                "TA",
+                parent_section_id="Lec 2",
+                section_type="discussion",
+            ),
         ],
     )
 
-    assert [[section.section_id for section in pair] for pair in group_sections(course)] == [
+    assert [
+        [section.section_id for section in pair] for pair in group_sections(course)
+    ] == [
         ["Lec 1", "Dis 1A"],
         ["Lec 2", "Dis 2A"],
     ]

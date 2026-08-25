@@ -27,7 +27,7 @@ frontend-dev:
 
 check:
 	$(VENV_PYTHON) -m pytest -q
-	$(VENV_PYTHON) -m ruff check course_planner/api.py course_planner/documents.py course_planner/graph.py course_planner/planner_models.py tests
+	$(VENV_PYTHON) -m ruff check course_planner/api.py course_planner/documents.py course_planner/graph.py course_planner/planner_models.py course_planner/prerequisites.py course_planner/roadmap.py course_planner/reporting.py course_planner/scheduling.py course_planner/scrapers/catalog_scraper.py course_planner/scrapers/soc_scraper.py course_planner/state.py course_planner/terms.py course_planner/utils.py tests
 	npm --prefix frontend run check
 
 test: check

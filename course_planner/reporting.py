@@ -17,11 +17,20 @@ def _clock(minutes: int) -> str:
 def _schedule_label(candidate: ScheduleCandidate) -> str:
     labels: list[str] = []
     for course in candidate.courses:
-        sections = "/".join(filter(None, [
-            course.get("lecture_section_id", ""),
-            course.get("discussion_section_id", ""),
-        ]))
-        labels.append(f"{course['course_code']} ({sections})" if sections else course["course_code"])
+        sections = "/".join(
+            filter(
+                None,
+                [
+                    course.get("lecture_section_id", ""),
+                    course.get("discussion_section_id", ""),
+                ],
+            )
+        )
+        labels.append(
+            f"{course['course_code']} ({sections})"
+            if sections
+            else course["course_code"]
+        )
     return ", ".join(labels)
 
 
@@ -43,27 +52,31 @@ def build_report(
     if candidates:
         top = candidates[0]
         codes = ", ".join(item["course_code"] for item in top.courses)
-        lines.extend([
-            "## Recommended schedule",
-            f"**Rank #1:** {codes}",
-            f"**Composite:** {top.composite_score:.3f} · **Units:** {top.total_units} · **Enrollment chance:** {top.min_enrollment_chance:.0%}",
-            "",
-            "| Rank | Courses and sections | Score | Units | Enrollment chance | Schedule quality |",
-            "|---:|---|---:|---:|---:|---:|",
-        ])
+        lines.extend(
+            [
+                "## Recommended schedule",
+                f"**Rank #1:** {codes}",
+                f"**Composite:** {top.composite_score:.3f} · **Units:** {top.total_units} · **Minimum availability heuristic:** {top.min_enrollment_chance:.0%}",
+                "",
+                "| Rank | Courses and sections | Score | Units | Availability heuristic | Schedule quality |",
+                "|---:|---|---:|---:|---:|---:|",
+            ]
+        )
         for candidate in candidates[:3]:
             lines.append(
                 f"| {candidate.rank} | {_schedule_label(candidate)} | "
                 f"{candidate.composite_score:.3f} | {candidate.total_units} | "
                 f"{candidate.min_enrollment_chance:.0%} | {candidate.schedule_quality_score:.3f} |"
             )
-        lines.extend([
-            "",
-            "## Recommended meeting times",
-            "",
-            "| Day | Course | Section | Time | Instructor | Location |",
-            "|---|---|---|---|---|---|",
-        ])
+        lines.extend(
+            [
+                "",
+                "## Recommended meeting times",
+                "",
+                "| Day | Course | Section | Time | Instructor | Location |",
+                "|---|---|---|---|---|---|",
+            ]
+        )
         for day in top.day_schedules:
             for section in day.sections:
                 lines.append(
@@ -72,15 +85,60 @@ def build_report(
                     f"{section.get('instructor', '') or 'TBA'} | {section.get('location', '') or 'TBA'} |"
                 )
         lines.append("")
+        if top.has_unverified_meeting_times:
+            lines.extend(
+                [
+                    "> **Meeting-time warning:** At least one selected section has a TBA or unparseable time, so its conflict check is incomplete.",
+                    "",
+                ]
+            )
+        lines.extend(
+            [
+                "## Prerequisite eligibility",
+                "",
+                "| Course | Status | Official catalog rule |",
+                "|---|---|---|",
+            ]
+        )
+        for course in top.courses:
+            summary = str(course.get("prerequisite_summary", "")).replace("|", "\\|")
+            url = course.get("catalog_url", "")
+            label = (
+                f"[{course['course_code']}]({url})" if url else course["course_code"]
+            )
+            lines.append(
+                f"| {label} | {course.get('prerequisite_status', 'unknown')} | {summary} |"
+            )
+        lines.extend(
+            [
+                "",
+                "Availability is a section-specific risk heuristic, not a calibrated probability or guarantee of enrollment.",
+                "",
+            ]
+        )
     else:
-        lines.extend(["## Recommendation", "No valid schedule was found under the supplied hard constraints.", ""])
+        lines.extend(
+            [
+                "## Recommendation",
+                "No valid schedule was found under the supplied hard constraints.",
+                "",
+            ]
+        )
 
     lines.extend(["## Evidence and freshness", ""])
     for source, record in sorted(evidence.items()):
-        lines.append(f"- **{source}:** {record.get('status', 'unknown')} · fetched {record.get('fetched_at', 'unknown')} · {record.get('detail', '')}")
+        lines.append(
+            f"- **{source}:** {record.get('status', 'unknown')} · fetched {record.get('fetched_at', 'unknown')} · {record.get('detail', '')}"
+        )
     if errors:
         lines.extend(["", "## Partial failures", ""])
         for error in errors:
             lines.append(f"- **{error['node']}:** {error['message']}")
-    lines.extend(["", "## Methodology", "Deterministic constraint filtering and weighted ranking are used for this direct-planning report; no language model is involved. Missing evidence is omitted from weighted scoring and reported instead of being silently treated as a positive signal."])
+    lines.extend(
+        [
+            "",
+            "## Methodology",
+            "Official UCLA Catalog rules are parsed and checked deterministically before constraint filtering and weighted ranking; no language model is involved in direct planning. Missing or ambiguous prerequisite evidence blocks eligibility, while missing optional ranking evidence is omitted from weighted scoring and reported.",
+        ]
+    )
     return "\n".join(lines)

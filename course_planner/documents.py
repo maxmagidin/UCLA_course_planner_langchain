@@ -10,10 +10,11 @@ import re
 import pdfplumber
 
 _COURSE_CODE = re.compile(
-    r"\b([A-Z]{2,6}(?:\s+[A-Z]{2,6})?)\s+(\d{1,3}[A-Z]?)\b",
+    r"\b([A-Z][A-Z&]{1,7}(?:\s+[A-Z][A-Z&]{1,7})?)\s+((?:C?M)?\d{1,3}[A-Z]{0,2})\b",
     re.IGNORECASE,
 )
 _MAX_PDF_BYTES = 15 * 1024 * 1024
+_MAX_PDF_PAGES = 80
 
 
 def _line_value(text: str, labels: str) -> str | None:
@@ -36,6 +37,10 @@ def extract_text_from_pdf_base64(encoded_pdf: str) -> str:
         raise ValueError("DARS PDF exceeds the 15 MB upload limit")
     pieces: list[str] = []
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        if len(pdf.pages) > _MAX_PDF_PAGES:
+            raise ValueError(
+                f"DARS PDF exceeds the {_MAX_PDF_PAGES}-page processing limit"
+            )
         for page in pdf.pages:
             text = page.extract_text()
             if text:
@@ -56,6 +61,73 @@ def extract_course_codes(text: str) -> list[str]:
         for department, number in _COURSE_CODE.findall(text)
     }
     return sorted(found)
+
+
+def classify_dars_courses(text: str) -> dict[str, list[str]]:
+    """Classify DARS codes conservatively using nearby audit headings.
+
+    Unknown layouts remain reviewable as ``unclassified`` and are not
+    automatically counted as completed coursework.
+    """
+    buckets: dict[str, set[str]] = {
+        "completed": set(),
+        "in_progress": set(),
+        "remaining": set(),
+        "unclassified": set(),
+    }
+    state = "unclassified"
+    markers = (
+        (
+            "in_progress",
+            re.compile(
+                r"\b(?:in[ -]?progress|currently enrolled|work in progress)\b",
+                re.IGNORECASE,
+            ),
+        ),
+        (
+            "remaining",
+            re.compile(
+                r"\b(?:still needed|remaining|not complete|unsatisfied|requirement not satisfied|select .{0,30} from|choose .{0,30} from)\b",
+                re.IGNORECASE,
+            ),
+        ),
+        (
+            "completed",
+            re.compile(
+                r"\b(?:courses? completed|completed courses?|course history|work completed|requirements? satisfied|courses? taken)\b",
+                re.IGNORECASE,
+            ),
+        ),
+    )
+    for line in (text or "").splitlines():
+        stripped = " ".join(line.split())
+        if not stripped:
+            continue
+        line_state = state
+        for candidate, pattern in markers:
+            if pattern.search(stripped):
+                state = candidate
+                line_state = candidate
+                break
+        codes = extract_course_codes(stripped)
+        if not codes:
+            continue
+        if re.search(r"\b(?:IP|IN PROGRESS)\b", stripped, re.IGNORECASE):
+            line_state = "in_progress"
+        elif re.search(
+            r"\b(?:NEEDED|REMAINING|NOT COMPLETE)\b", stripped, re.IGNORECASE
+        ):
+            line_state = "remaining"
+        elif re.search(r"\b(?:A[+\-]?|B[+\-]?|C[+\-]?|D[+\-]?|F|P|NP|CR)\b", stripped):
+            line_state = "completed"
+        buckets[line_state].update(codes)
+
+    # A course shown in history wins over a repeated appearance in a rule list.
+    buckets["remaining"] -= buckets["completed"] | buckets["in_progress"]
+    buckets["unclassified"] -= (
+        buckets["completed"] | buckets["in_progress"] | buckets["remaining"]
+    )
+    return {key: sorted(value) for key, value in buckets.items()}
 
 
 def extract_dars_hints(text: str) -> dict[str, str | float]:
