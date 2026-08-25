@@ -12,6 +12,16 @@ This version keeps the original project's UCLA data sources and scheduling
 domain logic, but replaces the eight-process `uagents` message pipeline with
 one typed, checkpointed LangGraph workflow.
 
+The idea for refactoring this project came as LangGraph is very good at orchestration, and can be used with any LLM, off of the ASI platform. Docker is also used to make sure that it can run platform-agnostic, so fellow Bruins can use it without being forced onto the ASI platform
+
+The `langchain-migration` branch is an active rework and continuation of that
+project. Its orchestration was rewritten with LangChain and LangGraph, and this
+version was taken off the ASI:One/Agentverse platform. Development is now
+building on top of the migrated workflow. It runs directly as a local web app,
+HTTP API, CLI, or Python library. The old ASI:One adapter remains in the
+repository only as a compatibility reference; it is not the deployed runtime.
+
+
 ## Project history
 
 This project began as the ASI:One hackathon-winning
@@ -24,12 +34,6 @@ eight independent agents built with
 and the original architecture and source remain available in the original
 repository linked above.
 
-The `langchain-migration` branch is an active rework and continuation of that
-project. Its orchestration was rewritten with LangChain and LangGraph, and this
-version was taken off the ASI:One/Agentverse platform. Development is now
-building on top of the migrated workflow. It runs directly as a local web app,
-HTTP API, CLI, or Python library. The old ASI:One adapter remains in the
-repository only as a compatibility reference; it is not the deployed runtime.
 
 ## Architecture
 
