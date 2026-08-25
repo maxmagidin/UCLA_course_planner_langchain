@@ -64,11 +64,74 @@ eligibility. Retrieval, eligibility, hard constraints, schedule generation,
 ranking, and reporting stay deterministic and testable. Direct planning does
 not need an API key.
 
-## Fork and run it
+## Run it today
 
-The repository contains both the FastAPI/LangGraph backend and the complete
-Vite frontend. A fork does not need a hosted service or a project-owned model
-key. Install Python 3.10+ and Node 22+, then run:
+The repository contains the FastAPI/LangGraph backend and the complete Vite
+frontend. A fork does not need a hosted service or a project-owned model key.
+The browser, API, CLI, and Python entrypoint all use the same planner.
+
+### Docker Compose (recommended)
+
+Install Docker Desktop, or Docker Engine with the Compose plugin. No local
+Python or Node installation is required. Then run:
+
+```bash
+git clone -b langchain-migration https://github.com/maxmagidin/UCLA_course_planner_langchain.git
+cd UCLA_course_planner_langchain
+docker compose up --build
+```
+
+Open the application at <http://localhost:8765/app/> or
+<http://127.0.0.1:8765/app/>. Interactive API documentation is available at
+<http://localhost:8765/docs>. The first build downloads the Python and npm
+dependencies; later builds reuse Docker's layer cache.
+
+The image is a multi-stage build: Node 22 compiles the Vite frontend, then a
+Python 3.12 runtime serves both the static application and FastAPI. The final
+container runs as a non-root `planner` user, uses one Uvicorn worker, includes
+a readiness health check, and stores SQLite state in the `planner-data` named
+volume.
+
+Useful lifecycle commands:
+
+```bash
+docker compose up --build -d              # build and run in the background
+docker compose ps                         # inspect container and health status
+docker compose logs -f planner            # follow application logs
+curl http://localhost:8765/api/ready      # verify storage and workers
+docker compose down                       # stop without deleting planner data
+```
+
+Planner checkpoints and completed background jobs survive ordinary container
+restarts. To deliberately erase the local planner database and start clean,
+run `docker compose down --volumes`. This permanently removes the Compose
+project's `planner-data` volume.
+
+To configure optional features, copy the safe template before starting:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Docker Compose reads that `.env` file and passes the supported planner,
+retrieval, model-provider, and LangSmith settings into the container. Direct
+planning does not need a model key. Keep `.env` private; it is gitignored and
+excluded from the Docker build context. The default image intentionally leaves
+the slow, browser-based Bruinwalk integration disabled and does not install a
+Playwright browser binary.
+
+To update an existing checkout:
+
+```bash
+git pull
+docker compose build --pull
+docker compose up -d
+```
+
+### Run from source
+
+Install Python 3.10+ and Node 22+, then run:
 
 ```bash
 git clone -b langchain-migration https://github.com/maxmagidin/UCLA_course_planner_langchain.git
@@ -77,11 +140,9 @@ make setup
 make run
 ```
 
-Open <http://127.0.0.1:8765/app/>. `make setup` creates `.venv`, installs the
+Open <http://localhost:8765/app/>. `make setup` creates `.venv`, installs the
 Python and npm dependencies, and builds the frontend. `make run` rebuilds the
-frontend and serves the entire application from FastAPI. The checked-in GitHub
-Actions workflow performs the same frontend build and backend test suite for
-pushes and pull requests.
+frontend and serves the application from FastAPI.
 
 To configure the pieces manually:
 
@@ -93,15 +154,16 @@ npm run build --prefix frontend
 .venv/bin/python -m uvicorn course_planner.api:app --host 127.0.0.1 --port 8765
 ```
 
-Docker is also supported. It builds the Vite application into the FastAPI
-image and keeps planner state in a named volume:
+Run the same checks used by GitHub Actions before contributing:
 
 ```bash
-docker compose up --build
+make check
+npm --prefix frontend run build
 ```
 
-Then open <http://127.0.0.1:8765/app/>. The container runs as a non-root user
-and exposes `/api/ready` for readiness checks.
+The checked-in CI workflow installs a clean Python/Node environment, builds the
+frontend, runs the backend suite, and checks the active Python code for every
+push and pull request.
 
 ## Browser workflow
 
@@ -157,7 +219,7 @@ flows:
 To exercise the CLI with the same profile:
 
 ```bash
-python -m course_planner.agent examples/profile.json
+.venv/bin/python -m course_planner.agent examples/profile.json
 ```
 
 Set the model configuration in the environment; do not put API keys in source files:
@@ -236,7 +298,13 @@ not silently plan against an old quarter:
 Then (or use the checked-in `examples/profile.json`):
 
 ```bash
-python -m course_planner.agent profile.json
+.venv/bin/python -m course_planner.agent profile.json
+```
+
+The same CLI can run inside the Compose service:
+
+```bash
+docker compose exec planner python -m course_planner.agent examples/profile.json
 ```
 
 The public Python entrypoint is also available:
@@ -317,9 +385,25 @@ educational information; protect the database file and choose a retention
 period appropriate for the deployment.
 
 This SQLite-backed queue is deliberately a single-process deployment. Do not
-start multiple Uvicorn workers against it. A multi-instance public service
-should replace it with a managed database and external task queue, and add
-authentication before accepting student records.
+start multiple Uvicorn workers against it; the Docker image is intentionally
+configured with one. This is ready for local, forked, and single-server use. A
+multi-instance or public multi-user service should replace SQLite and the local
+worker pool with a managed database and external task queue, add authentication
+and encryption, and define an appropriate student-record retention policy.
+
+## Docker troubleshooting
+
+- If port 8765 is already in use, stop the other process or change the Compose
+  port mapping from `8765:8765` to another host port such as `8876:8765`.
+- If the application is starting, wait for `docker compose ps` to report
+  `healthy`, then inspect `docker compose logs planner` if `/api/ready` fails.
+- If a source or dependency change is not appearing, run
+  `docker compose build --no-cache` once and start the service again.
+- UCLA course retrieval requires outbound network access. Future quarters can
+  remain partial until UCLA publishes their Schedule of Classes.
+- Docker does not make GitHub Pages a backend host. Pages can serve the Vite
+  build only; a fully working Pages deployment still needs a separately hosted
+  FastAPI service as described above.
 
 ## Legacy ASI:One compatibility surface
 
