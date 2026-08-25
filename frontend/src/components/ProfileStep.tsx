@@ -49,7 +49,7 @@ export function ProfileStep({
         <CardContent className="pt-6">
           <div className="mb-6 flex items-start gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950">
             <Info className="mt-0.5 size-5 shrink-0 text-ucla-blue" />
-            <p className="leading-6"><strong>{completedCourseCount} DARS courses</strong> will be treated as completed or in progress for prerequisite checks. You can edit them by returning to Step 1.</p>
+            <p className="leading-6"><strong>{completedCourseCount} completed DARS courses</strong> will be used for prerequisite checks. In-progress and remaining courses stay visible but do not unlock eligibility.</p>
           </div>
           <div className="grid gap-5 md:grid-cols-2">
             <Field label="Name">

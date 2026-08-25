@@ -19,6 +19,10 @@ interface PlanningStepProps {
   onIncludeSummerChange: (include: boolean) => void
   terms: EditableTerm[]
   onTermsChange: (terms: EditableTerm[]) => void
+  auditRemainingCourses: string[]
+  roadmapLoading: boolean
+  roadmapStatus: string
+  onAutoPlace: () => void
   profile: StudentProfile
   onProfileChange: (profile: StudentProfile) => void
   constraints: ConstraintsState
@@ -38,6 +42,10 @@ export function PlanningStep({
   onIncludeSummerChange,
   terms,
   onTermsChange,
+  auditRemainingCourses,
+  roadmapLoading,
+  roadmapStatus,
+  onAutoPlace,
   profile,
   onProfileChange,
   constraints,
@@ -66,6 +74,15 @@ export function PlanningStep({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-7 pt-6">
+          {!!auditRemainingCourses.length && (
+            <div className="flex flex-col gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0"><strong>{auditRemainingCourses.length} audit course{auditRemainingCourses.length === 1 ? '' : 's'} available to place.</strong>
+                <p className="mt-1 break-words leading-6 text-sky-800">{auditRemainingCourses.slice(0, 12).join(' · ')}{auditRemainingCourses.length > 12 ? ` · +${auditRemainingCourses.length - 12} more` : ''}</p>
+              </div>
+              <Button type="button" variant="outline" className="shrink-0 border-sky-300 bg-white" onClick={onAutoPlace} disabled={roadmapLoading}>{roadmapLoading ? 'Checking catalog…' : 'Auto-place by prerequisites'}</Button>
+            </div>
+          )}
+          {roadmapStatus && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm leading-6 text-emerald-800">{roadmapStatus}</div>}
           <div className="grid gap-3 sm:grid-cols-2">
             <button
               type="button"

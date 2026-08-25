@@ -3,6 +3,7 @@ import type {
   HorizonPlanResponse,
   HorizonTerm,
   ModelConfig,
+  RoadmapResponse,
   StudentProfile,
 } from '@/types'
 
@@ -52,6 +53,13 @@ export function runHorizon(profile: StudentProfile, terms: HorizonTerm[]): Promi
   return request('/api/plan/horizon', {
     method: 'POST',
     body: JSON.stringify({ profile, terms }),
+  })
+}
+
+export function suggestRoadmap(profile: StudentProfile, courses: string[], terms: HorizonTerm[]): Promise<RoadmapResponse> {
+  return request('/api/roadmap/suggest', {
+    method: 'POST',
+    body: JSON.stringify({ profile, courses, terms }),
   })
 }
 

@@ -7,7 +7,7 @@ import { ProfileStep } from '@/components/ProfileStep'
 import { ResultsStep } from '@/components/ResultsStep'
 import { StepRail } from '@/components/StepRail'
 import { Badge } from '@/components/ui/badge'
-import { apiHostLabel, autofillProfile, checkHealth, fileToBase64, parseDars, runHorizon } from '@/lib/api'
+import { apiHostLabel, autofillProfile, checkHealth, fileToBase64, parseDars, runHorizon, suggestRoadmap } from '@/lib/api'
 import { formatCourseList, parseCourseList } from '@/lib/utils'
 import type { ConstraintsState, EditableTerm, HorizonPlanResponse, ModelConfig, StudentProfile } from '@/types'
 
@@ -23,6 +23,8 @@ const defaultProfile: StudentProfile = {
   pass_open_datetime: '',
   term: `Fall ${currentYear}`,
   dars_courses: [],
+  dars_in_progress_courses: [],
+  dars_remaining_courses: [],
   required_courses: [],
   preferred_courses: [],
   hard_constraints: [],
@@ -73,6 +75,8 @@ function App() {
   const [darsText, setDarsText] = useState('')
   const [darsFile, setDarsFile] = useState<File | null>(null)
   const [coursesText, setCoursesText] = useState('')
+  const [inProgressCoursesText, setInProgressCoursesText] = useState('')
+  const [remainingCoursesText, setRemainingCoursesText] = useState('')
   const [darsParsed, setDarsParsed] = useState(false)
   const [darsLoading, setDarsLoading] = useState(false)
   const [darsStatus, setDarsStatus] = useState('')
@@ -91,6 +95,8 @@ function App() {
   const [constraints, setConstraints] = useState<ConstraintsState>(defaultConstraints)
   const [planLoading, setPlanLoading] = useState(false)
   const [planError, setPlanError] = useState('')
+  const [roadmapLoading, setRoadmapLoading] = useState(false)
+  const [roadmapStatus, setRoadmapStatus] = useState('')
   const [response, setResponse] = useState<HorizonPlanResponse | null>(null)
 
   const completedCourses = useMemo(() => parseCourseList(coursesText), [coursesText])
@@ -128,10 +134,20 @@ function App() {
       const result = darsFile
         ? await parseDars({ dars_pdf_base64: await fileToBase64(darsFile) })
         : await parseDars({ dars_text: darsText })
-      setCoursesText(formatCourseList(result.course_codes))
-      setProfile((current) => ({ ...current, ...result.profile_hints, dars_courses: result.course_codes }))
+      const eligible = result.completed_courses
+      const remaining = [...result.remaining_courses, ...result.unclassified_courses]
+      setCoursesText(formatCourseList(eligible))
+      setInProgressCoursesText(formatCourseList(result.in_progress_courses))
+      setRemainingCoursesText(formatCourseList(remaining))
+      setProfile((current) => ({
+        ...current,
+        ...result.profile_hints,
+        dars_courses: eligible,
+        dars_in_progress_courses: result.in_progress_courses,
+        dars_remaining_courses: remaining,
+      }))
       setDarsParsed(true)
-      setDarsStatus(`Read ${result.character_count.toLocaleString()} characters and found ${result.course_codes.length} course codes. Review the list, then continue.`)
+      setDarsStatus(`Read ${result.character_count.toLocaleString()} characters: ${eligible.length} completed, ${result.in_progress_courses.length} in progress, ${result.remaining_courses.length} remaining, and ${result.unclassified_courses.length} needing review.`)
     } catch (error) {
       setDarsError(error instanceof Error ? error.message : 'Could not parse that DARS.')
     } finally {
@@ -140,15 +156,22 @@ function App() {
   }
 
   const continueFromDars = () => {
-    setProfile((current) => ({ ...current, dars_courses: completedCourses }))
+    setProfile((current) => ({
+      ...current,
+      dars_courses: completedCourses,
+      dars_in_progress_courses: parseCourseList(inProgressCoursesText),
+      dars_remaining_courses: parseCourseList(remainingCoursesText),
+    }))
     advance(1)
   }
 
   const loadDemo = () => {
-    const demoCourses = ['COM SCI 31', 'COM SCI 32', 'COM SCI 33', 'MATH 31A']
+    const demoCourses = ['COM SCI 31', 'COM SCI 32', 'COM SCI 33', 'COM SCI 35L', 'MATH 31A']
     setDarsFile(null)
-    setDarsText('Student Name: Alex Student\nMajor: Computer Science\nClass Level: Junior\nCumulative GPA: 3.60\nUnits Completed: 96\nCOM SCI 31\nCOM SCI 32\nCOM SCI 33\nMATH 31A')
+    setDarsText('Student Name: Alex Student\nMajor: Computer Science\nClass Level: Junior\nCumulative GPA: 3.60\nUnits Completed: 96\nCOURSES COMPLETED\nCOM SCI 31 A\nCOM SCI 32 A-\nCOM SCI 33 B+\nCOM SCI 35L A\nMATH 31A B+')
     setCoursesText(formatCourseList(demoCourses))
+    setInProgressCoursesText('')
+    setRemainingCoursesText('COM SCI 111\nCOM SCI 118\nCOM SCI 180')
     setDarsParsed(true)
     setDarsStatus('Test student loaded. The fields remain editable.')
     setProfile({
@@ -162,13 +185,15 @@ function App() {
       pass_open_datetime: '2026-08-28 09:00',
       term: 'Fall 2026',
       dars_courses: demoCourses,
+      dars_in_progress_courses: [],
+      dars_remaining_courses: ['COM SCI 111', 'COM SCI 118', 'COM SCI 180'],
     })
     setMode('quarter')
     setTerms([{
       ...blankTerm('Fall 2026'),
-      requiredText: 'COM SCI 111\nCOM SCI 118',
-      minUnits: 9,
-      maxUnits: 9,
+      requiredText: 'COM SCI 111',
+      minUnits: 5,
+      maxUnits: 5,
     }])
     setConstraints(defaultConstraints)
   }
@@ -193,6 +218,8 @@ function App() {
         ...filled,
         term: current.term,
         dars_courses: completedCourses,
+        dars_in_progress_courses: parseCourseList(inProgressCoursesText),
+        dars_remaining_courses: parseCourseList(remainingCoursesText),
       }))
       if (filled.required_courses.length || filled.preferred_courses.length) {
         setTerms((current) => current.map((term, index) => index === 0 ? {
@@ -295,6 +322,44 @@ function App() {
     }
   }
 
+  const autoPlaceAuditCourses = async () => {
+    const remaining = parseCourseList(remainingCoursesText)
+    if (!remaining.length) {
+      setPlanError('Step 1 does not contain any remaining audit courses to place.')
+      return
+    }
+    setPlanError('')
+    setRoadmapStatus('')
+    setRoadmapLoading(true)
+    const horizonTerms = terms.map((term) => ({
+      term: term.term,
+      required_courses: [],
+      preferred_courses: [],
+      min_units: term.minUnits,
+      max_units: term.maxUnits,
+    }))
+    try {
+      const suggestion = await suggestRoadmap(profile, remaining, horizonTerms)
+      setTerms((current) => current.map((term) => {
+        const placement = suggestion.terms.find((item) => item.term === term.term)
+        return {
+          ...term,
+          requiredText: formatCourseList(placement?.courses || []),
+          preferredText: '',
+        }
+      }))
+      const placed = suggestion.terms.reduce((total, term) => total + term.courses.length, 0)
+      const warning = suggestion.warnings.length
+        ? ` ${suggestion.warnings.slice(0, 3).join(' ')}${suggestion.warnings.length > 3 ? ` +${suggestion.warnings.length - 3} more warnings.` : ''}`
+        : ''
+      setRoadmapStatus(`Placed ${placed} course${placed === 1 ? '' : 's'} in the earliest prerequisite-safe terms.${warning}`)
+    } catch (error) {
+      setPlanError(error instanceof Error ? error.message : 'Could not build the prerequisite roadmap.')
+    } finally {
+      setRoadmapLoading(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-page text-slate-900">
       <header className="border-b border-white/10 bg-ucla-blue-dark text-white">
@@ -328,9 +393,9 @@ function App() {
       <main className="mx-auto grid w-full max-w-[1440px] gap-6 px-0 py-0 sm:px-6 sm:py-6 lg:grid-cols-[260px_minmax(0,1fr)] lg:px-8 lg:py-8">
         <StepRail current={step} highest={highestStep} onNavigate={goTo} />
         <section className="min-w-0 px-4 pb-12 sm:px-0">
-          {step === 0 && <DarsStep darsText={darsText} onDarsTextChange={setDarsText} file={darsFile} onFileChange={setDarsFile} coursesText={coursesText} onCoursesTextChange={setCoursesText} parsed={darsParsed} loading={darsLoading} status={darsStatus} error={darsError} onParse={readDars} onContinue={continueFromDars} onDemo={loadDemo} />}
+          {step === 0 && <DarsStep darsText={darsText} onDarsTextChange={setDarsText} file={darsFile} onFileChange={setDarsFile} coursesText={coursesText} onCoursesTextChange={setCoursesText} inProgressCoursesText={inProgressCoursesText} onInProgressCoursesTextChange={setInProgressCoursesText} remainingCoursesText={remainingCoursesText} onRemainingCoursesTextChange={setRemainingCoursesText} parsed={darsParsed} loading={darsLoading} status={darsStatus} error={darsError} onParse={readDars} onContinue={continueFromDars} onDemo={loadDemo} />}
           {step === 1 && <ProfileStep profile={profile} onChange={setProfile} completedCourseCount={completedCourses.length} error={profileError} autofillLoading={autofillLoading} autofillStatus={autofillStatus} autofillError={autofillError} onAutofill={useAutofill} onBack={() => setStep(0)} onContinue={continueFromProfile} />}
-          {step === 2 && <PlanningStep mode={mode} onModeChange={changeMode} academicYear={academicYear} onAcademicYearChange={changeAcademicYear} includeSummer={includeSummer} onIncludeSummerChange={changeSummer} terms={terms} onTermsChange={setTerms} profile={profile} onProfileChange={setProfile} constraints={constraints} onConstraintsChange={setConstraints} loading={planLoading} error={planError} onBack={() => setStep(1)} onRun={runPlan} />}
+          {step === 2 && <PlanningStep mode={mode} onModeChange={changeMode} academicYear={academicYear} onAcademicYearChange={changeAcademicYear} includeSummer={includeSummer} onIncludeSummerChange={changeSummer} terms={terms} onTermsChange={setTerms} auditRemainingCourses={parseCourseList(remainingCoursesText)} roadmapLoading={roadmapLoading} roadmapStatus={roadmapStatus} onAutoPlace={autoPlaceAuditCourses} profile={profile} onProfileChange={setProfile} constraints={constraints} onConstraintsChange={setConstraints} loading={planLoading} error={planError} onBack={() => setStep(1)} onRun={runPlan} />}
           {step === 3 && response && <ResultsStep response={response} studentName={profile.name} onEdit={() => setStep(2)} onStartOver={() => window.location.reload()} />}
         </section>
       </main>

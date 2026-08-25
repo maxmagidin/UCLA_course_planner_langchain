@@ -13,6 +13,8 @@ export interface StudentProfile {
   pass_open_datetime: string
   term: string
   dars_courses: string[]
+  dars_in_progress_courses: string[]
+  dars_remaining_courses: string[]
   required_courses: string[]
   preferred_courses: string[]
   hard_constraints: string[]
@@ -47,6 +49,10 @@ export interface DarsParseResponse {
   source: 'text' | 'pdf'
   character_count: number
   course_codes: string[]
+  completed_courses: string[]
+  in_progress_courses: string[]
+  remaining_courses: string[]
+  unclassified_courses: string[]
   profile_hints: Partial<Pick<StudentProfile, 'name' | 'major' | 'year' | 'gpa' | 'units_completed'>>
 }
 
@@ -64,6 +70,10 @@ export interface CourseChoice {
   units: number
   lecture_section_id?: string
   discussion_section_id?: string
+  prerequisite_status?: 'none' | 'met' | 'corequisite' | 'unmet' | 'unknown'
+  prerequisite_summary?: string
+  catalog_url?: string
+  meeting_times_verified?: boolean
 }
 
 export interface Meeting {
@@ -94,6 +104,7 @@ export interface ScheduleCandidate {
   composite_score: number
   preference_match_score: number
   rank: number
+  has_unverified_meeting_times?: boolean
 }
 
 export interface EvidenceRecord {
@@ -130,6 +141,12 @@ export interface HorizonPlanResponse {
   status: PlanStatus
   terms: HorizonTermResult[]
   completed_courses: string[]
+}
+
+export interface RoadmapResponse {
+  terms: Array<{ term: string; courses: string[]; total_units: number }>
+  unplaced_courses: string[]
+  warnings: string[]
 }
 
 export interface ConstraintsState {

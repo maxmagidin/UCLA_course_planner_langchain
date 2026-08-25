@@ -20,14 +20,19 @@ function CandidateSummary({ candidate }: { candidate: ScheduleCandidate }) {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap gap-2">
-        {(candidate.courses || []).map((course) => <Badge key={course.course_code} className="px-3 py-1.5 text-xs">{course.course_code} · {course.units}u</Badge>)}
+        {(candidate.courses || []).map((course) => (
+          <span key={course.course_code} className="inline-flex items-center gap-1">
+            <Badge className="px-3 py-1.5 text-xs">{course.course_code} · {course.units}u · {course.prerequisite_status === 'corequisite' ? 'coreq included' : 'eligible'}</Badge>
+            {course.catalog_url && <a href={course.catalog_url} target="_blank" rel="noreferrer" className="rounded p-1 text-ucla-blue hover:bg-sky-50" aria-label={`Open catalog entry for ${course.course_code}`}><ExternalLink className="size-3.5" /></a>}
+          </span>
+        ))}
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
           ['Units', candidate.total_units ?? 0],
           ['Campus days', candidate.days_on_campus ?? 0],
           ['Score', (candidate.composite_score ?? 0).toFixed(3)],
-          ['Min. seat chance', `${Math.round(enrollment * 100)}%`],
+          ['Min. availability', `${Math.round(enrollment * 100)}%`],
         ].map(([label, value]) => (
           <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
             <span className="block text-[10px] font-black uppercase tracking-[.13em] text-slate-400">{label}</span>
@@ -35,6 +40,10 @@ function CandidateSummary({ candidate }: { candidate: ScheduleCandidate }) {
           </div>
         ))}
       </div>
+      <p className="text-xs leading-5 text-slate-500">Availability is a section-specific risk heuristic, not a calibrated enrollment probability.</p>
+      {candidate.has_unverified_meeting_times && (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900"><AlertTriangle className="mt-0.5 size-4 shrink-0" />At least one selected section has a TBA or unparseable meeting time. Its conflict check is incomplete.</div>
+      )}
       <div className="overflow-hidden rounded-xl border border-slate-200">
         <div className="grid grid-cols-[90px_minmax(0,1fr)] border-b border-slate-200 bg-slate-50 px-4 py-2 text-[10px] font-black uppercase tracking-[.13em] text-slate-500">
           <span>Day</span><span>Meeting times</span>

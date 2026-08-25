@@ -14,6 +14,10 @@ interface DarsStepProps {
   onFileChange: (file: File | null) => void
   coursesText: string
   onCoursesTextChange: (value: string) => void
+  inProgressCoursesText: string
+  onInProgressCoursesTextChange: (value: string) => void
+  remainingCoursesText: string
+  onRemainingCoursesTextChange: (value: string) => void
   parsed: boolean
   loading: boolean
   status: string
@@ -30,6 +34,10 @@ export function DarsStep({
   onFileChange,
   coursesText,
   onCoursesTextChange,
+  inProgressCoursesText,
+  onInProgressCoursesTextChange,
+  remainingCoursesText,
+  onRemainingCoursesTextChange,
   parsed,
   loading,
   status,
@@ -110,19 +118,36 @@ export function DarsStep({
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs font-black uppercase tracking-[.16em] text-ucla-blue">Review before planning</p>
-                <h3 className="mt-2 text-lg font-extrabold text-slate-950">Completed or in-progress courses</h3>
+                <h3 className="mt-2 text-lg font-extrabold text-slate-950">Audit course review</h3>
               </div>
               <Badge variant={parsed ? 'success' : 'outline'}>{parsed ? `${courseCount} found` : 'Waiting'}</Badge>
             </div>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              DARS layouts vary. Remove anything that should not count and add anything the parser missed.
+              Only completed courses unlock prerequisites. Move uncertain codes to the correct list before continuing.
             </p>
+            <label className="mt-5 text-xs font-black uppercase tracking-[.13em] text-emerald-700">Completed</label>
             <Textarea
-              className="mt-5 min-h-44 flex-1 bg-white font-mono text-xs leading-6"
+              className="mt-2 min-h-32 flex-1 bg-white font-mono text-xs leading-6"
               value={coursesText}
               onChange={(event) => onCoursesTextChange(event.target.value)}
               placeholder={'COM SCI 31\nMATH 31A\nENGCOMP 3'}
-              aria-label="Completed or in-progress courses"
+              aria-label="Completed courses"
+            />
+            <label className="mt-4 text-xs font-black uppercase tracking-[.13em] text-sky-700">In progress (does not unlock prerequisites)</label>
+            <Textarea
+              className="mt-2 min-h-24 flex-1 bg-white font-mono text-xs leading-6"
+              value={inProgressCoursesText}
+              onChange={(event) => onInProgressCoursesTextChange(event.target.value)}
+              placeholder={'COM SCI 35L\nMATH 61'}
+              aria-label="In-progress courses"
+            />
+            <label className="mt-4 text-xs font-black uppercase tracking-[.13em] text-amber-700">Remaining or needs review</label>
+            <Textarea
+              className="mt-2 min-h-32 flex-1 bg-white font-mono text-xs leading-6"
+              value={remainingCoursesText}
+              onChange={(event) => onRemainingCoursesTextChange(event.target.value)}
+              placeholder={'COM SCI 111\nCOM SCI 180\nSTATS 100A'}
+              aria-label="Remaining or unclassified courses"
             />
             <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
               <FileText className="size-4 text-ucla-blue" /> One course per line works best.
