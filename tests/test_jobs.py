@@ -58,3 +58,28 @@ def test_running_job_can_be_cancelled_at_a_safe_boundary(tmp_path, monkeypatch):
         assert "cancel" in cancelled["message"].lower()
     finally:
         manager.shutdown()
+
+
+def test_late_cancellation_update_cannot_overwrite_terminal_status(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PLANNER_DATABASE_PATH", str(tmp_path / "terminal.sqlite3"))
+    manager = PlannerJobManager()
+    try:
+        job = manager.submit(
+            "test",
+            {},
+            lambda payload, progress, cancel: {"status": "completed"},
+        )
+        completed = _wait_for(manager, job["id"], {"completed"})
+
+        manager._update(
+            job["id"],
+            status="cancelling",
+            message="Late cancellation request.",
+            active_only=True,
+        )
+
+        assert manager.get(job["id"])["status"] == completed["status"]
+    finally:
+        manager.shutdown()

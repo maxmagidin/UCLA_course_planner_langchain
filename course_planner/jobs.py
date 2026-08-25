@@ -224,6 +224,7 @@ class PlannerJobManager:
         progress: int | None = None,
         result: dict[str, Any] | None = None,
         error: str = "",
+        active_only: bool = False,
     ) -> None:
         assignments = ["status = ?", "message = ?", "updated_at = ?", "error = ?"]
         values: list[Any] = [status, message, _now(), error]
@@ -236,8 +237,11 @@ class PlannerJobManager:
         values.append(job_id)
         connection = connect_database()
         try:
+            where = "id = ?"
+            if active_only:
+                where += " AND status IN ('queued', 'running', 'cancelling')"
             connection.execute(
-                f"UPDATE planner_jobs SET {', '.join(assignments)} WHERE id = ?",
+                f"UPDATE planner_jobs SET {', '.join(assignments)} WHERE {where}",
                 values,
             )
             connection.commit()
@@ -282,6 +286,7 @@ class PlannerJobManager:
                 if cancelled_before_start
                 else "Cancellation requested; waiting for the active step to finish."
             ),
+            active_only=True,
         )
         return self.get(job_id)
 
