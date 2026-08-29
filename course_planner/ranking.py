@@ -9,24 +9,30 @@ def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
-def rank_schedules(candidates: list[ScheduleCandidate], profile: StudentProfile) -> list[ScheduleCandidate]:
+def rank_schedules(
+    candidates: list[ScheduleCandidate], profile: StudentProfile
+) -> list[ScheduleCandidate]:
     for candidate in candidates:
         metrics: list[tuple[float, float]] = [
             (_clamp(candidate.avg_enrollment_chance), profile.weight_enrollment_chance),
             (_clamp(candidate.schedule_quality_score), profile.weight_schedule_quality),
         ]
-        if candidate.avg_bruinwalk_composite is not None:
-            metrics.append((
-                _clamp(candidate.avg_bruinwalk_composite / 5.0),
-                profile.weight_professor_rating,
-            ))
+        if candidate.avg_rating_score is not None:
+            metrics.append(
+                (
+                    _clamp(candidate.avg_rating_score / 5.0),
+                    profile.weight_professor_rating,
+                )
+            )
         if candidate.avg_gpa is not None:
             metrics.append((_clamp(candidate.avg_gpa / 4.0), profile.weight_avg_gpa))
         if candidate.avg_workload_hours_per_week is not None:
-            metrics.append((
-                _clamp(1.0 - candidate.avg_workload_hours_per_week / 20.0),
-                profile.weight_workload,
-            ))
+            metrics.append(
+                (
+                    _clamp(1.0 - candidate.avg_workload_hours_per_week / 20.0),
+                    profile.weight_workload,
+                )
+            )
 
         # Missing evidence is omitted, not treated as a zero or (for workload)
         # accidentally rewarded as a perfect score.
@@ -39,7 +45,10 @@ def rank_schedules(candidates: list[ScheduleCandidate], profile: StudentProfile)
         candidate.composite_score = round(_clamp(score), 4)
         candidate.preference_match_score = _preference_match(candidate, profile)
 
-    candidates.sort(key=lambda item: (item.preference_match_score, item.composite_score), reverse=True)
+    candidates.sort(
+        key=lambda item: (item.preference_match_score, item.composite_score),
+        reverse=True,
+    )
     for index, candidate in enumerate(candidates, start=1):
         candidate.rank = index
     return candidates

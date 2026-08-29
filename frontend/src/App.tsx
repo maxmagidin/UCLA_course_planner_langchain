@@ -7,9 +7,9 @@ import { ProfileStep } from '@/components/ProfileStep'
 import { ResultsStep } from '@/components/ResultsStep'
 import { StepRail } from '@/components/StepRail'
 import { Badge } from '@/components/ui/badge'
-import { apiHostLabel, autofillProfile, checkHealth, fileToBase64, parseDars, runHorizon, suggestRoadmap } from '@/lib/api'
+import { apiHostLabel, checkHealth, fileToBase64, parseDars, runHorizon, suggestRoadmap } from '@/lib/api'
 import { formatCourseList, parseCourseList } from '@/lib/utils'
-import type { ConstraintsState, EditableTerm, HorizonPlanResponse, ModelConfig, StudentProfile } from '@/types'
+import type { ConstraintsState, EditableTerm, EnhancementProposal, HorizonPlanResponse, StudentProfile } from '@/types'
 
 const currentYear = new Date().getFullYear()
 
@@ -61,10 +61,8 @@ function academicTerms(year: number, includeSummer: boolean): EditableTerm[] {
 
 function timeConstraint(prefix: string, value: string): string {
   if (!value) return ''
-  const [hourText, minute = '00'] = value.split(':')
-  const hour = Number(hourText)
-  const suffix = hour < 12 ? 'am' : 'pm'
-  return `${prefix} ${hour % 12 || 12}:${minute} ${suffix}`
+  // Keep the wire format aligned with the enhancement validator: 24-hour HH:MM.
+  return `${prefix} ${value}`
 }
 
 function App() {
@@ -81,12 +79,12 @@ function App() {
   const [darsLoading, setDarsLoading] = useState(false)
   const [darsStatus, setDarsStatus] = useState('')
   const [darsError, setDarsError] = useState('')
+  const [darsMissingFields, setDarsMissingFields] = useState<string[]>([])
+  const [darsWarnings, setDarsWarnings] = useState<string[]>([])
 
   const [profile, setProfile] = useState<StudentProfile>(defaultProfile)
   const [profileError, setProfileError] = useState('')
-  const [autofillLoading, setAutofillLoading] = useState(false)
-  const [autofillStatus, setAutofillStatus] = useState('')
-  const [autofillError, setAutofillError] = useState('')
+  const [unclassifiedCoursesText, setUnclassifiedCoursesText] = useState('')
 
   const [mode, setMode] = useState<'quarter' | 'year'>('quarter')
   const [academicYear, setAcademicYear] = useState(currentYear)
@@ -136,20 +134,26 @@ function App() {
       const result = darsFile
         ? await parseDars({ dars_pdf_base64: await fileToBase64(darsFile) })
         : await parseDars({ dars_text: darsText })
-      const eligible = result.completed_courses
-      const remaining = [...result.remaining_courses, ...result.unclassified_courses]
+      const eligible = result.courses?.completed || result.completed_courses || []
+      const inProgress = result.courses?.in_progress || result.in_progress_courses || []
+      const remaining = result.courses?.remaining || result.remaining_courses || []
+      const unclassified = result.courses?.unclassified || result.unclassified_courses || []
       setCoursesText(formatCourseList(eligible))
-      setInProgressCoursesText(formatCourseList(result.in_progress_courses))
+      setInProgressCoursesText(formatCourseList(inProgress))
       setRemainingCoursesText(formatCourseList(remaining))
+      setUnclassifiedCoursesText(formatCourseList(unclassified))
+      setDarsMissingFields(result.missing_fields || [])
+      setDarsWarnings(result.warnings || [])
       setProfile((current) => ({
         ...current,
-        ...result.profile_hints,
+        ...(result.profile_draft || result.profile_hints || {}),
         dars_courses: eligible,
-        dars_in_progress_courses: result.in_progress_courses,
-        dars_remaining_courses: remaining,
+        dars_in_progress_courses: inProgress,
+        dars_remaining_courses: [...remaining, ...unclassified],
       }))
       setDarsParsed(true)
-      setDarsStatus(`Read ${result.character_count.toLocaleString()} characters: ${eligible.length} completed, ${result.in_progress_courses.length} in progress, ${result.remaining_courses.length} remaining, and ${result.unclassified_courses.length} needing review.`)
+      const details = result.character_count ? `Read ${result.character_count.toLocaleString()} characters. ` : 'DARS imported. '
+      setDarsStatus(`${details}${eligible.length} completed, ${inProgress.length} in progress, ${remaining.length} remaining, and ${unclassified.length} needing review.${result.warnings?.length ? ` ${result.warnings[0]}` : ''}`)
     } catch (error) {
       setDarsError(error instanceof Error ? error.message : 'Could not parse that DARS.')
     } finally {
@@ -162,7 +166,7 @@ function App() {
       ...current,
       dars_courses: completedCourses,
       dars_in_progress_courses: parseCourseList(inProgressCoursesText),
-      dars_remaining_courses: parseCourseList(remainingCoursesText),
+      dars_remaining_courses: [...parseCourseList(remainingCoursesText), ...parseCourseList(unclassifiedCoursesText)],
     }))
     advance(1)
   }
@@ -174,8 +178,11 @@ function App() {
     setCoursesText(formatCourseList(demoCourses))
     setInProgressCoursesText('')
     setRemainingCoursesText('COM SCI 111\nCOM SCI 118\nCOM SCI 180')
+    setUnclassifiedCoursesText('')
     setDarsParsed(true)
     setDarsStatus('Test student loaded. The fields remain editable.')
+    setDarsMissingFields([])
+    setDarsWarnings([])
     setProfile({
       ...defaultProfile,
       name: 'Alex Student',
@@ -209,36 +216,10 @@ function App() {
     advance(2)
   }
 
-  const useAutofill = async (description: string, model: ModelConfig) => {
-    setAutofillError('')
-    setAutofillStatus('')
-    setAutofillLoading(true)
-    try {
-      const filled = await autofillProfile(description, model, completedCourses)
-      setProfile((current) => ({
-        ...current,
-        ...filled,
-        term: current.term,
-        dars_courses: completedCourses,
-        dars_in_progress_courses: parseCourseList(inProgressCoursesText),
-        dars_remaining_courses: parseCourseList(remainingCoursesText),
-      }))
-      if (filled.required_courses.length || filled.preferred_courses.length) {
-        setTerms((current) => current.map((term, index) => index === 0 ? {
-          ...term,
-          requiredText: formatCourseList(filled.required_courses),
-          preferredText: formatCourseList(filled.preferred_courses),
-        } : term))
-      }
-      if (filled.hard_constraints.length) {
-        setConstraints((current) => ({ ...current, additional: filled.hard_constraints.join('\n') }))
-      }
-      setAutofillStatus('Autofill complete. Review every field before continuing.')
-    } catch (error) {
-      setAutofillError(error instanceof Error ? error.message : 'Model autofill failed.')
-    } finally {
-      setAutofillLoading(false)
-    }
+  const applyEnhancement = (proposal: EnhancementProposal) => {
+    setTerms(proposal.terms.map((term) => ({ id: termId(term.term), term: term.term, requiredText: formatCourseList(term.required_courses), preferredText: formatCourseList(term.preferred_courses), minUnits: term.min_units, maxUnits: term.max_units })))
+    setProfile((current) => ({ ...current, format_preference: proposal.format_preference, weight_enrollment_chance: proposal.ranking_weights.weight_enrollment_chance ?? current.weight_enrollment_chance, weight_professor_rating: proposal.ranking_weights.weight_professor_rating ?? current.weight_professor_rating, weight_avg_gpa: proposal.ranking_weights.weight_avg_gpa ?? current.weight_avg_gpa, weight_schedule_quality: proposal.ranking_weights.weight_schedule_quality ?? current.weight_schedule_quality, weight_workload: proposal.ranking_weights.weight_workload ?? current.weight_workload }))
+    setConstraints((current) => ({ ...current, additional: proposal.hard_constraints.join('\n') }))
   }
 
   const changeMode = (nextMode: 'quarter' | 'year') => {
@@ -296,7 +277,7 @@ function App() {
       }
     }
     const hardConstraints = [
-      ...constraints.daysOff.map((day) => `${day} off`),
+      constraints.daysOff.length ? `Days off: ${constraints.daysOff.join(', ')}` : '',
       timeConstraint('No classes before', constraints.earliest),
       timeConstraint('No classes after', constraints.latest),
       ...constraints.additional.split('\n').map((item) => item.trim()),
@@ -305,6 +286,8 @@ function App() {
       ...profile,
       term: normalizedTerms[0].term,
       dars_courses: completedCourses,
+      dars_in_progress_courses: parseCourseList(inProgressCoursesText),
+      dars_remaining_courses: [...parseCourseList(remainingCoursesText), ...parseCourseList(unclassifiedCoursesText)],
       required_courses: normalizedTerms[0].required_courses,
       preferred_courses: normalizedTerms[0].preferred_courses,
       hard_constraints: hardConstraints,
@@ -383,7 +366,7 @@ function App() {
         <div className="mx-auto flex w-full max-w-[1440px] items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <a href="/app/" className="flex min-w-0 items-center gap-3">
             <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-ucla-gold text-sm font-black tracking-tight text-ucla-blue-dark">UCLA</span>
-            <span className="min-w-0"><strong className="block truncate text-sm font-extrabold sm:text-base">Course Planner</strong><small className="hidden text-xs text-sky-200 sm:block">LangChain + LangGraph rebuild</small></span>
+            <span className="min-w-0"><strong className="block truncate text-sm font-extrabold sm:text-base">Course Planner</strong><small className="hidden text-xs text-sky-200 sm:block">Evidence-backed UCLA planning</small></span>
           </a>
           <div className="flex items-center gap-2 sm:gap-3">
             <Badge variant="warning" className="hidden sm:inline-flex">Work in progress</Badge>
@@ -410,9 +393,9 @@ function App() {
       <main className="mx-auto grid w-full max-w-[1440px] gap-6 px-0 py-0 sm:px-6 sm:py-6 lg:grid-cols-[260px_minmax(0,1fr)] lg:px-8 lg:py-8">
         <StepRail current={step} highest={highestStep} onNavigate={goTo} />
         <section className="min-w-0 px-4 pb-12 sm:px-0">
-          {step === 0 && <DarsStep darsText={darsText} onDarsTextChange={setDarsText} file={darsFile} onFileChange={setDarsFile} coursesText={coursesText} onCoursesTextChange={setCoursesText} inProgressCoursesText={inProgressCoursesText} onInProgressCoursesTextChange={setInProgressCoursesText} remainingCoursesText={remainingCoursesText} onRemainingCoursesTextChange={setRemainingCoursesText} parsed={darsParsed} loading={darsLoading} status={darsStatus} error={darsError} onParse={readDars} onContinue={continueFromDars} onDemo={loadDemo} />}
-          {step === 1 && <ProfileStep profile={profile} onChange={setProfile} completedCourseCount={completedCourses.length} error={profileError} autofillLoading={autofillLoading} autofillStatus={autofillStatus} autofillError={autofillError} onAutofill={useAutofill} onBack={() => setStep(0)} onContinue={continueFromProfile} />}
-          {step === 2 && <PlanningStep mode={mode} onModeChange={changeMode} academicYear={academicYear} onAcademicYearChange={changeAcademicYear} includeSummer={includeSummer} onIncludeSummerChange={changeSummer} terms={terms} onTermsChange={setTerms} auditRemainingCourses={parseCourseList(remainingCoursesText)} roadmapLoading={roadmapLoading} roadmapStatus={roadmapStatus} onAutoPlace={autoPlaceAuditCourses} profile={profile} onProfileChange={setProfile} constraints={constraints} onConstraintsChange={setConstraints} loading={planLoading} progress={planProgress} error={planError} onBack={() => setStep(1)} onRun={runPlan} onCancel={cancelPlan} />}
+          {step === 0 && <DarsStep darsText={darsText} onDarsTextChange={setDarsText} file={darsFile} onFileChange={setDarsFile} parsed={darsParsed} loading={darsLoading} status={darsStatus} error={darsError} onParse={readDars} onContinue={continueFromDars} onDemo={loadDemo} />}
+          {step === 1 && <ProfileStep profile={profile} onChange={setProfile} completedCourseCount={completedCourses.length} completedCoursesText={coursesText} inProgressCoursesText={inProgressCoursesText} remainingCoursesText={remainingCoursesText} unclassifiedCoursesText={unclassifiedCoursesText} missingFields={darsMissingFields} warnings={darsWarnings} onCompletedCoursesChange={setCoursesText} onInProgressCoursesChange={setInProgressCoursesText} onRemainingCoursesChange={setRemainingCoursesText} onUnclassifiedCoursesChange={setUnclassifiedCoursesText} error={profileError} onBack={() => setStep(0)} onContinue={continueFromProfile} />}
+          {step === 2 && <PlanningStep mode={mode} onModeChange={changeMode} academicYear={academicYear} onAcademicYearChange={changeAcademicYear} includeSummer={includeSummer} onIncludeSummerChange={changeSummer} terms={terms} onTermsChange={setTerms} auditRemainingCourses={[...parseCourseList(remainingCoursesText), ...parseCourseList(unclassifiedCoursesText)]} roadmapLoading={roadmapLoading} roadmapStatus={roadmapStatus} onAutoPlace={autoPlaceAuditCourses} profile={profile} onProfileChange={setProfile} constraints={constraints} onConstraintsChange={setConstraints} loading={planLoading} progress={planProgress} error={planError} onBack={() => setStep(1)} onRun={runPlan} onCancel={cancelPlan} onApplyEnhancement={applyEnhancement} />}
           {step === 3 && response && <ResultsStep response={response} studentName={profile.name} onEdit={() => setStep(2)} onStartOver={() => window.location.reload()} />}
         </section>
       </main>

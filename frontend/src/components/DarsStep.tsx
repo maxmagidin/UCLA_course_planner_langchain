@@ -5,19 +5,13 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Field, Textarea } from '@/components/ui/field'
-import { cn, parseCourseList } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 
 interface DarsStepProps {
   darsText: string
   onDarsTextChange: (value: string) => void
   file: File | null
   onFileChange: (file: File | null) => void
-  coursesText: string
-  onCoursesTextChange: (value: string) => void
-  inProgressCoursesText: string
-  onInProgressCoursesTextChange: (value: string) => void
-  remainingCoursesText: string
-  onRemainingCoursesTextChange: (value: string) => void
   parsed: boolean
   loading: boolean
   status: string
@@ -32,12 +26,6 @@ export function DarsStep({
   onDarsTextChange,
   file,
   onFileChange,
-  coursesText,
-  onCoursesTextChange,
-  inProgressCoursesText,
-  onInProgressCoursesTextChange,
-  remainingCoursesText,
-  onRemainingCoursesTextChange,
   parsed,
   loading,
   status,
@@ -48,7 +36,6 @@ export function DarsStep({
 }: DarsStepProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
-  const courseCount = parseCourseList(coursesText).length
 
   const chooseFile = (nextFile?: File) => {
     if (nextFile) onFileChange(nextFile)
@@ -114,44 +101,13 @@ export function DarsStep({
             </Field>
           </div>
 
-          <div className="flex min-w-0 flex-col rounded-2xl border border-slate-200 bg-slate-50/65 p-5">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs font-black uppercase tracking-[.16em] text-ucla-blue">Review before planning</p>
-                <h3 className="mt-2 text-lg font-extrabold text-slate-950">Audit course review</h3>
-              </div>
-              <Badge variant={parsed ? 'success' : 'outline'}>{parsed ? `${courseCount} found` : 'Waiting'}</Badge>
+          <div className="flex min-w-0 flex-col justify-between rounded-2xl border border-slate-200 bg-slate-50/65 p-6">
+            <div>
+              <div className="flex items-center gap-3"><span className="grid size-11 place-items-center rounded-xl bg-white text-ucla-blue shadow-sm"><FileText className="size-5" /></span><div><p className="text-xs font-black uppercase tracking-[.16em] text-ucla-blue">One source of truth</p><h3 className="mt-1 text-lg font-extrabold text-slate-950">Import first, review next</h3></div></div>
+              <p className="mt-5 text-sm leading-6 text-slate-600">DARS parsing extracts student fields and course buckets. On the next screen you can inspect and correct each value before any schedule is built.</p>
+              <div className="mt-5 space-y-3 text-sm text-slate-700"><p className="flex gap-2"><span className="font-black text-ucla-blue">1.</span> Upload a DARS PDF or paste exported text.</p><p className="flex gap-2"><span className="font-black text-ucla-blue">2.</span> Read the audit with the local planner API.</p><p className="flex gap-2"><span className="font-black text-ucla-blue">3.</span> Review the parsed profile and completed, in-progress, remaining, and unclassified buckets.</p></div>
             </div>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              Only completed courses unlock prerequisites. Move uncertain codes to the correct list before continuing.
-            </p>
-            <label className="mt-5 text-xs font-black uppercase tracking-[.13em] text-emerald-700">Completed</label>
-            <Textarea
-              className="mt-2 min-h-32 flex-1 bg-white font-mono text-xs leading-6"
-              value={coursesText}
-              onChange={(event) => onCoursesTextChange(event.target.value)}
-              placeholder={'COM SCI 31\nMATH 31A\nENGCOMP 3'}
-              aria-label="Completed courses"
-            />
-            <label className="mt-4 text-xs font-black uppercase tracking-[.13em] text-sky-700">In progress (does not unlock prerequisites)</label>
-            <Textarea
-              className="mt-2 min-h-24 flex-1 bg-white font-mono text-xs leading-6"
-              value={inProgressCoursesText}
-              onChange={(event) => onInProgressCoursesTextChange(event.target.value)}
-              placeholder={'COM SCI 35L\nMATH 61'}
-              aria-label="In-progress courses"
-            />
-            <label className="mt-4 text-xs font-black uppercase tracking-[.13em] text-amber-700">Remaining or needs review</label>
-            <Textarea
-              className="mt-2 min-h-32 flex-1 bg-white font-mono text-xs leading-6"
-              value={remainingCoursesText}
-              onChange={(event) => onRemainingCoursesTextChange(event.target.value)}
-              placeholder={'COM SCI 111\nCOM SCI 180\nSTATS 100A'}
-              aria-label="Remaining or unclassified courses"
-            />
-            <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
-              <FileText className="size-4 text-ucla-blue" /> One course per line works best.
-            </div>
+            <div className="mt-8 flex items-center gap-2 text-xs text-slate-500"><FileText className="size-4 text-ucla-blue" /> You can continue with manual fields if parsing is unavailable.</div>
           </div>
         </CardContent>
       </Card>

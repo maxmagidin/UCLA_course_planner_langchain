@@ -101,11 +101,7 @@ class PlannerJobManager:
 
     @staticmethod
     def _sanitized_payload(payload: dict[str, Any]) -> dict[str, Any]:
-        sanitized = deepcopy(payload)
-        profile = sanitized.get("profile")
-        if isinstance(profile, dict):
-            profile.pop("dars_text", None)
-        return sanitized
+        return deepcopy(payload)
 
     def submit(
         self, kind: str, payload: dict[str, Any], runner: JobRunner
@@ -153,12 +149,21 @@ class PlannerJobManager:
             connection.close()
 
         cancel_event = threading.Event()
-        future = self._executor.submit(
-            self._execute, job_id, payload, runner, cancel_event
-        )
+        # Publish the cancellation token and future atomically with submission.
+        # Otherwise a DELETE arriving in the narrow submit window can mark the
+        # row as cancelling without ever signalling the running task.
         with self._lock:
             self._cancel_events[job_id] = cancel_event
-            self._futures[job_id] = future
+            try:
+                future = self._executor.submit(
+                    self._execute, job_id, payload, runner, cancel_event
+                )
+                self._futures[job_id] = future
+            except Exception:
+                self._cancel_events.pop(job_id, None)
+                raise
+        # ``add_done_callback`` may invoke immediately for an already-finished
+        # task, so register it only after releasing ``_lock``.
         future.add_done_callback(lambda _: self._forget_runtime(job_id))
         return self.get(job_id) or {"id": job_id, "status": "queued"}
 

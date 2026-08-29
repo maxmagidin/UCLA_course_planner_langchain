@@ -46,22 +46,69 @@ export interface EditableTerm {
 }
 
 export interface DarsParseResponse {
-  source: 'text' | 'pdf'
-  character_count: number
-  course_codes: string[]
-  completed_courses: string[]
-  in_progress_courses: string[]
-  remaining_courses: string[]
-  unclassified_courses: string[]
-  profile_hints: Partial<Pick<StudentProfile, 'name' | 'major' | 'year' | 'gpa' | 'units_completed'>>
+  source?: 'text' | 'pdf'
+  character_count?: number
+  course_codes?: string[]
+  completed_courses?: string[]
+  in_progress_courses?: string[]
+  remaining_courses?: string[]
+  unclassified_courses?: string[]
+  profile_hints?: Partial<Pick<StudentProfile, 'name' | 'major' | 'year' | 'gpa' | 'units_completed'>>
+  /** Preferred API shape: an editable draft plus explicit course buckets and provenance. */
+  profile_draft?: Partial<Pick<StudentProfile, 'name' | 'major' | 'year' | 'gpa' | 'units_completed'>>
+  courses?: {
+    completed?: string[]
+    in_progress?: string[]
+    remaining?: string[]
+    unclassified?: string[]
+  }
+  course_buckets?: {
+    completed?: string[]
+    in_progress?: string[]
+    remaining?: string[]
+    unclassified?: string[]
+  }
+  provenance?: Record<string, unknown>
+  missing_fields?: string[]
+  warnings?: string[]
 }
 
 export interface ModelConfig {
-  provider: string
+  provider: 'openai' | 'anthropic' | 'openai_compatible'
   api_key: string
   base_url: string
   model: string
   temperature: number
+}
+
+export interface RankingWeights {
+  weight_enrollment_chance: number
+  weight_professor_rating: number
+  weight_avg_gpa: number
+  weight_schedule_quality: number
+  weight_workload: number
+}
+
+export interface EnhancementContext {
+  terms: HorizonTerm[]
+  allowed_courses: string[]
+  format_preference: CourseFormat
+  hard_constraints: string[]
+  ranking_weights: RankingWeights
+}
+
+export interface EnhancementProposal {
+  terms: HorizonTerm[]
+  format_preference: CourseFormat
+  hard_constraints: string[]
+  ranking_weights: RankingWeights
+}
+
+export interface EnhancementResponse {
+  proposal: EnhancementProposal
+  explanations: string[]
+  warnings: string[]
+  requires_review: boolean
 }
 
 export interface CourseChoice {

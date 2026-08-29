@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import time
 
+import pytest
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
 
 import course_planner.api as api_module
 import course_planner.graph as graph_module
+import course_planner.intake as intake_module
 import course_planner.jobs as jobs_module
 from course_planner.api import app
-from course_planner.planner_models import PlannerResult, StudentProfile
+from course_planner.planner_models import (
+    EnhancementProposal,
+    EnhancementResponse,
+    EnhancementTerm,
+    PlannerResult,
+    RankingWeights,
+)
 from course_planner.roadmap import RoadmapSuggestion, RoadmapTerm
 
 client = TestClient(app)
@@ -29,7 +38,7 @@ def test_health_and_frontend_are_ready():
 
 def test_dars_parse_returns_reviewable_courses_and_profile_hints():
     response = client.post(
-        "/dars/parse",
+        "/api/dars/parse",
         json={
             "dars_text": """
 Student Name: Alex Student
@@ -58,46 +67,185 @@ MATH 31A
         "gpa": 3.6,
         "units_completed": 96.0,
     }
+    assert body["course_buckets"]["completed"] == ["COM SCI 31", "MATH 31A"]
+    assert body["profile_draft"]["dars_courses"] == ["COM SCI 31", "MATH 31A"]
+    assert body["provenance"]["gpa"] == "dars"
+    assert "term" in body["missing_fields"]
 
 
 def test_dars_parse_requires_a_readable_document():
-    response = client.post("/dars/parse", json={})
+    response = client.post("/api/dars/parse", json={})
 
     assert response.status_code == 400
     assert "DARS" in response.json()["detail"]
 
 
-def test_byok_intake_key_is_transient_and_not_returned(monkeypatch):
+def _enhancement_context():
+    return {
+        "terms": [
+            {
+                "term": "Fall 2026",
+                "required_courses": [],
+                "preferred_courses": [],
+                "min_units": 12,
+                "max_units": 16,
+            }
+        ],
+        "allowed_courses": ["COM SCI 101"],
+        "format_preference": "any",
+        "hard_constraints": [],
+        "ranking_weights": {
+            "weight_enrollment_chance": 0.25,
+            "weight_professor_rating": 0.2,
+            "weight_avg_gpa": 0.2,
+            "weight_schedule_quality": 0.2,
+            "weight_workload": 0.15,
+        },
+    }
+
+
+def test_byok_enhancement_key_is_transient_and_returns_complete_proposal(monkeypatch):
     captured = {}
 
-    def fake_extract(conversation, model):
+    def fake_enhance(description, context, model):
         captured["key"] = model.api_key.get_secret_value()
-        captured["conversation"] = conversation
-        return StudentProfile(
-            name="Alex Student", major="Computer Science", term="Fall 2026"
+        captured["provider"] = model.provider
+        captured["description"] = description
+        return EnhancementResponse(
+            proposal=EnhancementProposal(
+                terms=[
+                    EnhancementTerm(term="Fall 2026", preferred_courses=["COM SCI 101"])
+                ],
+                format_preference="any",
+                hard_constraints=[],
+                ranking_weights=RankingWeights(),
+            ),
+            explanations=["Matches your stated interest."],
         )
 
-    monkeypatch.setattr(api_module, "extract_profile", fake_extract)
+    monkeypatch.setattr(api_module, "enhance_planning", fake_enhance)
     response = client.post(
-        "/intake",
+        "/api/planning/enhance",
         json={
-            "conversation": [{"role": "user", "content": "I am a junior CS major."}],
+            "description": "Prefer COM SCI 101.",
+            "context": _enhancement_context(),
             "model": {
-                "provider": "openai",
+                "provider": "anthropic",
                 "api_key": "request-only-key",
-                "base_url": "https://api.openai.com/v1",
-                "model": "gpt-4o-mini",
             },
         },
     )
 
     assert response.status_code == 200
     assert captured["key"] == "request-only-key"
-    assert captured["conversation"][0]["content"] == "I am a junior CS major."
+    assert captured["provider"] == "anthropic"
+    assert captured["description"] == "Prefer COM SCI 101."
+    assert "profile" not in response.json()
+    assert response.json()["requires_review"] is True
+    assert response.json()["proposal"]["terms"][0]["preferred_courses"] == [
+        "COM SCI 101"
+    ]
     assert "request-only-key" not in response.text
 
 
-def test_invalid_pdf_is_a_client_error_before_planning():
+def test_custom_local_enhancement_accepts_an_empty_api_key(monkeypatch):
+    captured = {}
+
+    def fake_enhance(description, context, model):
+        captured["provider"] = model.provider
+        captured["key"] = model.api_key.get_secret_value()
+        captured["base_url"] = model.base_url
+        return EnhancementResponse(
+            proposal=EnhancementProposal(
+                terms=context.terms,
+                format_preference=context.format_preference,
+                hard_constraints=context.hard_constraints,
+                ranking_weights=context.ranking_weights,
+            )
+        )
+
+    monkeypatch.setattr(api_module, "enhance_planning", fake_enhance)
+    response = client.post(
+        "/api/planning/enhance",
+        json={
+            "description": "Prefer afternoons.",
+            "context": _enhancement_context(),
+            "model": {
+                "provider": "openai_compatible",
+                "base_url": "http://127.0.0.1:11434/v1",
+                "model": "local-test-model",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "provider": "openai_compatible",
+        "key": "",
+        "base_url": "http://127.0.0.1:11434/v1",
+    }
+
+
+def test_enhancement_accepts_exact_browser_payload_and_merges_context(monkeypatch):
+    class FakeModel:
+        def invoke(self, messages):
+            return AIMessage(
+                content='{"patch":{"terms":[{"term":"Fall 2026","required_courses":["COM SCI 101"],"preferred_courses":[],"min_units":12,"max_units":16}],"format_preference":"in-person","hard_constraints":["Friday off","No classes before 10am"],"ranking_weights":{"weight_professor_rating":0.8}},"explanations":["You asked for later classes."],"warnings":[]}'
+            )
+
+    monkeypatch.setattr(
+        intake_module, "create_chat_model", lambda *, config: FakeModel()
+    )
+    payload = {
+        "description": "Keep Friday free and prioritize professor quality.",
+        "context": _enhancement_context(),
+        "model": {"api_key": "request-only-key"},
+    }
+    response = client.post("/api/planning/enhance", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["requires_review"] is True
+    assert body["proposal"]["terms"][0]["required_courses"] == ["COM SCI 101"]
+    assert body["proposal"]["hard_constraints"] == [
+        "Friday off",
+        "No classes before 10:00",
+    ]
+    assert body["proposal"]["ranking_weights"]["weight_enrollment_chance"] == 0.25
+    assert body["proposal"]["ranking_weights"]["weight_professor_rating"] == 0.8
+
+
+def test_enhancement_request_rejects_unknown_fields():
+    payload = {
+        "description": "Prefer afternoons.",
+        "context": _enhancement_context(),
+        "model": {"api_key": "request-only-key"},
+        "profile": {"name": "Must not be accepted"},
+    }
+    assert client.post("/api/planning/enhance", json=payload).status_code == 422
+
+
+def test_enhancement_unknown_course_is_rejected(monkeypatch):
+    monkeypatch.setattr(
+        api_module,
+        "enhance_planning",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            api_module.PreferenceValidationError("course outside the allow-list")
+        ),
+    )
+    response = client.post(
+        "/api/planning/enhance",
+        json={
+            "description": "Take COM SCI 999.",
+            "context": _enhancement_context(),
+            "model": {"api_key": "request-only-key"},
+        },
+    )
+    assert response.status_code == 422
+    assert "allow-list" in response.text
+
+
+def test_raw_dars_is_not_accepted_by_planning():
     response = client.post(
         "/plan",
         json={
@@ -110,8 +258,58 @@ def test_invalid_pdf_is_a_client_error_before_planning():
         },
     )
 
-    assert response.status_code == 400
-    assert "not valid base64" in response.json()["detail"]
+    assert response.status_code == 422
+
+
+def test_legacy_profile_intake_routes_are_removed():
+    assert client.post("/api/intake", json={}).status_code == 404
+    assert client.post("/api/chat", json={}).status_code == 404
+
+
+def test_raw_dars_is_not_accepted_inside_profile():
+    response = client.post(
+        "/api/plan",
+        json={
+            "profile": {
+                "name": "Test Student",
+                "major": "Computer Science",
+                "term": "Fall 2026",
+                "dars_text": "private audit text",
+            }
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_model_config_never_reads_process_environment(monkeypatch):
+    monkeypatch.setenv("MODEL_API_KEY", "environment-secret")
+    from course_planner.model_provider import create_chat_model
+
+    with pytest.raises(RuntimeError):
+        create_chat_model()
+
+
+def test_model_base_url_rejects_private_dns_resolution(monkeypatch):
+    import course_planner.planner_models as models
+
+    monkeypatch.setattr(
+        models.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, None, ("10.0.0.4", 443))],
+    )
+    with pytest.raises(ValueError, match="private addresses"):
+        models.ModelConfig(
+            api_key="request-only-key", base_url="https://model.example/v1"
+        )
+
+
+def test_public_deployment_requires_model_host_allowlist(monkeypatch):
+    import course_planner.planner_models as models
+
+    monkeypatch.setenv("PLANNER_PUBLIC_DEPLOYMENT", "true")
+    monkeypatch.delenv("MODEL_HOST_ALLOWLIST", raising=False)
+    with pytest.raises(ValueError, match="MODEL_HOST_ALLOWLIST"):
+        models.ModelConfig(api_key="request-only-key")
 
 
 def test_plan_endpoint_runs_graph_in_worker_thread(monkeypatch):
@@ -155,6 +353,8 @@ def test_plan_endpoint_runs_graph_in_worker_thread(monkeypatch):
         },
     )
     monkeypatch.setenv("PLANNER_ENABLE_GRADES", "false")
+    monkeypatch.setenv("PLANNER_ENABLE_HISTORICAL_ENROLLMENT", "false")
+    monkeypatch.setenv("PLANNER_ENABLE_BRUINWALK", "false")
 
     response = client.post(
         "/plan",

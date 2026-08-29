@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -20,6 +19,7 @@ from uuid import uuid4
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from course_planner.instructor_identity import match_instructor
 from course_planner.persistence import planner_checkpointer
 from course_planner.planner_models import PlannerResult, StudentProfile
 from course_planner.prerequisites import (
@@ -47,7 +47,9 @@ from course_planner.utils import (
     EnrollmentPrediction,
     ProfessorRatings,
     Section,
+    bayesian_adjusted_rating,
     deserialize,
+    rating_confidence,
 )
 from course_planner.utils import (
     StudentProfile as LegacyProfile,
@@ -111,10 +113,6 @@ def _departments(profile: StudentProfile) -> set[str]:
 
 def _normalize_code(value: str) -> str:
     return normalize_course_code(value)
-
-
-def _instructor_surname(value: str) -> str:
-    return re.sub(r"[^A-Z]", "", value.upper().split(",", 1)[0])
 
 
 def _build_course_options(
@@ -332,7 +330,7 @@ def retrieve_classes_node(state: PlannerState) -> dict[str, Any]:
             )
         raw: list[dict[str, Any]] = []
         requested = profile.required_courses + profile.preferred_courses
-        for department in _departments(profile):
+        for department in sorted(_departments(profile)):
             raw.extend(
                 scrape_quarter_courses(
                     profile.term,
@@ -408,14 +406,33 @@ def enrollment_node(state: PlannerState) -> dict[str, Any]:
     try:
         profile = StudentProfile.model_validate(state["profile"])
         courses = _course_objects(state.get("courses", []))
-        historical_enabled = _env_flag("PLANNER_ENABLE_HISTORICAL_ENROLLMENT")
+        historical_enabled = _env_flag(
+            "PLANNER_ENABLE_HISTORICAL_ENROLLMENT", default=True
+        )
+        histories: dict[str, list[dict]] = {}
+        if historical_enabled and courses:
+            with ThreadPoolExecutor(max_workers=min(4, len(courses))) as executor:
+                future_to_code = {
+                    executor.submit(scrape_historical_enrollment, course.course_code): (
+                        course.course_code
+                    )
+                    for course in courses
+                }
+                for future in as_completed(future_to_code):
+                    code = future_to_code[future]
+                    try:
+                        histories[code] = future.result()
+                    except Exception:
+                        logger.debug(
+                            "Historical enrollment failed for %s",
+                            code,
+                            exc_info=True,
+                        )
+                        histories[code] = []
         timed_observations = 0
+        final_observations = 0
         for course in courses:
-            history = (
-                scrape_historical_enrollment(course.course_code)
-                if historical_enabled
-                else []
-            )
+            history = histories.get(course.course_code, [])
             timed_history = [
                 row
                 for row in history
@@ -424,6 +441,12 @@ def enrollment_node(state: PlannerState) -> dict[str, Any]:
             ]
             n = len(timed_history)
             timed_observations += n
+            final_history = [
+                row
+                for row in history
+                if row.get("snapshot_type") == "final" and row.get("capacity")
+            ]
+            final_observations += len(final_history)
             day1 = (
                 sum(
                     (row.get("enrollment_day_1", 0) / max(row.get("capacity", 1), 1))
@@ -484,14 +507,14 @@ def enrollment_node(state: PlannerState) -> dict[str, Any]:
             )
             actual = min(section_scores) if section_scores else 0.5
             course.enrollment_prediction = EnrollmentPrediction(
-                historical_quarters_sampled=n,
+                historical_quarters_sampled=len(history),
                 avg_fill_rate_by_day_1=day1,
                 avg_fill_rate_by_day_7=day7,
                 has_historically_gone_to_waitlist=sum(
-                    bool(row.get("went_to_waitlist")) for row in timed_history
+                    bool(row.get("went_to_waitlist")) for row in history
                 )
-                > n / 2
-                if n
+                > len(history) / 2
+                if history
                 else False,
                 current_fill_rate=fill,
                 current_waitlist_count=current.waitlist if current else 0,
@@ -508,11 +531,12 @@ def enrollment_node(state: PlannerState) -> dict[str, Any]:
                 else 0.0,
                 notes=(
                     f"Low-confidence availability heuristic from the selected section's current fill"
-                    f" and {n} historical observations; this is not a calibrated probability."
+                    f", {n} timed historical snapshots, and {len(final_history)} final-only records;"
+                    " this is not a calibrated probability."
                 ),
             )
         detail = (
-            f"current enrollment plus {timed_observations} actual timed historical snapshots; final-only records are not backfilled"
+            f"current enrollment plus {timed_observations} timed snapshots and {final_observations} final-only historical records; final records are not backfilled as timed snapshots"
             if historical_enabled
             else "current enrollment snapshot; historical lookups disabled for quick local runs"
         )
@@ -536,11 +560,73 @@ def enrollment_node(state: PlannerState) -> dict[str, Any]:
         }
 
 
+def _enrich_course_ratings(course: CourseOption) -> tuple[CourseOption, int]:
+    """Fetch one course's independent rating records."""
+    fetched_count = 0
+    course.course_ratings = scrape_course_ratings(course.course_code)
+    if course.course_ratings:
+        if course.course_ratings.adjusted_rating is None:
+            course.course_ratings.adjusted_rating = bayesian_adjusted_rating(
+                course.course_ratings.overall_course_rating,
+                course.course_ratings.total_reviews,
+            )
+            course.course_ratings.rating_confidence = rating_confidence(
+                course.course_ratings.total_reviews
+            )
+        fetched_count += 1
+    ratings: dict[str, ProfessorRatings] = {}
+    generic_instructors = {"", "ta", "tba", "staff", "the staff", "to be announced"}
+    for section in course.sections:
+        instructor = section.instructor.strip()
+        if instructor.lower() not in generic_instructors and instructor not in ratings:
+            result = scrape_professor_ratings(instructor, course.course_code)
+            if result:
+                if result.adjusted_rating is None:
+                    result.adjusted_rating = bayesian_adjusted_rating(
+                        result.overall_rating, result.total_reviews
+                    )
+                    result.rating_confidence = rating_confidence(result.total_reviews)
+                ratings[instructor] = result
+        if instructor in ratings:
+            rating = ratings[instructor]
+            section.professor_rating = rating.adjusted_rating
+            section.professor_rating_raw = rating.overall_rating
+            section.professor_rating_adjusted = rating.adjusted_rating
+            section.professor_rating_count = rating.total_reviews
+            section.professor_rating_confidence = rating.rating_confidence
+            section.professor_rating_match_status = rating.match_status
+            section.professor_rating_source = rating.source
+            section.professor_rating_source_url = rating.source_url
+            if section.professor_rating is not None:
+                fetched_count += 1
+    course.professor_ratings = ratings or None
+    values = [
+        item.adjusted_rating
+        for item in ratings.values()
+        if item.adjusted_rating is not None
+    ]
+    professor_score = sum(values) / len(values) if values else None
+    course_score = (
+        course.course_ratings.adjusted_rating
+        if course.course_ratings and course.course_ratings.adjusted_rating is not None
+        else None
+    )
+    if professor_score is not None and course_score is not None:
+        course.rating_score = round(professor_score * 0.6 + course_score * 0.4, 4)
+    elif professor_score is not None:
+        course.rating_score = round(professor_score, 4)
+    elif course_score is not None:
+        course.rating_score = round(course_score, 4)
+    else:
+        course.rating_score = None
+    return course, fetched_count
+
+
 def ratings_node(state: PlannerState) -> dict[str, Any]:
     node = "ratings"
     try:
         courses = _course_objects(state.get("courses", []))
-        if not _env_flag("PLANNER_ENABLE_BRUINWALK"):
+        if not _env_flag("PLANNER_ENABLE_BRUINWALK", default=True):
             return {
                 "ratings_courses": _as_dicts(courses),
                 "evidence": {
@@ -553,48 +639,34 @@ def ratings_node(state: PlannerState) -> dict[str, Any]:
                 },
                 **event("ratings: skipped in quick local mode"),
             }
-        for course in courses:
-            course.course_ratings = scrape_course_ratings(course.course_code)
-            ratings: dict[str, ProfessorRatings] = {}
-            for section in course.sections:
-                instructor = section.instructor.strip()
-                if instructor and instructor not in ratings:
-                    result = scrape_professor_ratings(instructor, course.course_code)
-                    if result:
-                        ratings[instructor] = result
-                if instructor in ratings:
-                    section.professor_rating = ratings[instructor].overall_rating
-            course.professor_ratings = ratings or None
-            values = [
-                item.overall_rating
-                for item in ratings.values()
-                if item.overall_rating is not None
-            ]
-            professor_score = sum(values) / len(values) if values else None
-            course_score = (
-                course.course_ratings.overall_course_rating
-                if course.course_ratings
-                and course.course_ratings.overall_course_rating is not None
-                else None
-            )
-            if professor_score is not None and course_score is not None:
-                course.bruinwalk_composite_score = round(
-                    professor_score * 0.6 + course_score * 0.4, 4
-                )
-            elif professor_score is not None:
-                course.bruinwalk_composite_score = round(professor_score, 4)
-            elif course_score is not None:
-                course.bruinwalk_composite_score = round(course_score, 4)
-            else:
-                course.bruinwalk_composite_score = None
+        fetched_count = 0
+        enriched = list(courses)
+        if courses:
+            with ThreadPoolExecutor(max_workers=min(3, len(courses))) as executor:
+                future_to_index = {
+                    executor.submit(_enrich_course_ratings, course): index
+                    for index, course in enumerate(courses)
+                }
+                for future in as_completed(future_to_index):
+                    index = future_to_index[future]
+                    try:
+                        enriched[index], count = future.result()
+                        fetched_count += count
+                    except Exception:
+                        logger.debug(
+                            "Rating enrichment failed for %s",
+                            courses[index].course_code,
+                            exc_info=True,
+                        )
+        courses = enriched
         return {
             "ratings_courses": _as_dicts(courses),
             "evidence": {
                 "bruinwalk": {
                     "source": "Bruinwalk",
                     "fetched_at": datetime.now(timezone.utc).isoformat(),
-                    "status": "ok",
-                    "detail": "course and instructor ratings",
+                    "status": "ok" if fetched_count else "partial",
+                    "detail": f"course and instructor ratings; {fetched_count} source records parsed",
                 }
             },
             **event("ratings: enrichment complete"),
@@ -627,15 +699,11 @@ def grades_node(state: PlannerState) -> dict[str, Any]:
             records = data.get(_normalize_code(course.course_code), {})
             if records:
                 for section in course.sections:
-                    surname = _instructor_surname(section.instructor.strip())
-                    distribution = next(
-                        (
-                            item
-                            for record_instructor, item in records.items()
-                            if surname
-                            and _instructor_surname(record_instructor) == surname
-                        ),
-                        None,
+                    match = match_instructor(section.instructor.strip(), list(records))
+                    distribution = (
+                        records[match.matched.original]
+                        if match.is_match and match.matched
+                        else None
                     )
                     if distribution:
                         section.avg_gpa = distribution.avg_gpa or None
@@ -678,13 +746,29 @@ def merge_evidence_node(state: PlannerState) -> dict[str, Any]:
                 rating = ratings[course.course_code.upper()]
                 course.course_ratings = rating.course_ratings
                 course.professor_ratings = rating.professor_ratings
-                course.bruinwalk_composite_score = rating.bruinwalk_composite_score
+                course.rating_score = rating.rating_score
                 by_id = {section.section_id: section for section in rating.sections}
                 for section in course.sections:
                     if section.section_id in by_id:
-                        section.professor_rating = by_id[
-                            section.section_id
-                        ].professor_rating
+                        enriched = by_id[section.section_id]
+                        section.professor_rating = enriched.professor_rating
+                        section.professor_rating_raw = enriched.professor_rating_raw
+                        section.professor_rating_adjusted = (
+                            enriched.professor_rating_adjusted
+                        )
+                        section.professor_rating_count = enriched.professor_rating_count
+                        section.professor_rating_confidence = (
+                            enriched.professor_rating_confidence
+                        )
+                        section.professor_rating_match_status = (
+                            enriched.professor_rating_match_status
+                        )
+                        section.professor_rating_source = (
+                            enriched.professor_rating_source
+                        )
+                        section.professor_rating_source_url = (
+                            enriched.professor_rating_source_url
+                        )
             if course.course_code.upper() in grades:
                 grade = grades[course.course_code.upper()]
                 course.grade_distribution = grade.grade_distribution
@@ -751,7 +835,7 @@ def report_node(state: PlannerState) -> dict[str, Any]:
 
 
 def build_graph(*, checkpointer=None):
-    """Compile the planner graph with durable thread-level checkpoints."""
+    """Compile the planner graph with an explicit or in-memory checkpointer."""
     graph = StateGraph(PlannerState)
     graph.add_node("retrieve_classes", retrieve_classes_node)
     graph.add_node("prerequisites", prerequisites_node)
@@ -792,8 +876,14 @@ def run_planner(
     thread_id = thread_id or run_id
     if checkpointer is not None:
         return _invoke_planner(parsed, thread_id, run_id, checkpointer)
-    with planner_checkpointer() as persistent:
-        return _invoke_planner(parsed, thread_id, run_id, persistent)
+    if _env_flag("PLANNER_PERSIST_GRAPH_CHECKPOINTS"):
+        with planner_checkpointer() as persistent:
+            return _invoke_planner(parsed, thread_id, run_id, persistent)
+    # The current graph has no pause/resume or human-in-the-loop boundary, so
+    # persisting every intermediate profile adds sensitive-data retention
+    # without providing recovery semantics. Background job metadata remains
+    # durable in SQLite; graph checkpoints are opt-in until resume is exposed.
+    return _invoke_planner(parsed, thread_id, run_id, InMemorySaver())
 
 
 def _invoke_planner(
@@ -802,14 +892,11 @@ def _invoke_planner(
     run_id: str,
     checkpointer,
 ) -> PlannerResult:
-    # Course classifications are sufficient after ingestion. Keeping the raw
-    # audit text out of graph state prevents it from entering checkpoints.
-    checkpoint_profile = profile.model_copy(update={"dars_text": None})
     state = build_graph(checkpointer=checkpointer).invoke(
         {
             "run_id": run_id,
             "thread_id": thread_id,
-            "profile": checkpoint_profile.model_dump(mode="json"),
+            "profile": profile.model_dump(mode="json"),
             "errors": [],
             "events": [],
         },

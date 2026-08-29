@@ -12,7 +12,9 @@ from course_planner.planner_models import StudentProfile
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the UCLA course planner graph")
-    parser.add_argument("profile", type=Path, help="JSON file containing a StudentProfile")
+    parser.add_argument(
+        "profile", type=Path, help="JSON file containing a StudentProfile"
+    )
     args = parser.parse_args()
     profile = StudentProfile.model_validate(json.loads(args.profile.read_text()))
     result = run_planner(profile)

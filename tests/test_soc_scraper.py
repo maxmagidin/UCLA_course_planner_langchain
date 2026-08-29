@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import course_planner.scrapers.soc_scraper as soc_module
 from course_planner.scheduling import group_sections, parse_minutes
 from course_planner.scrapers.soc_scraper import (
     _parse_course_titles,
     _parse_section_rows,
     _parse_time,
+    scrape_historical_enrollment,
 )
 from course_planner.utils import CourseOption, Section
 
@@ -106,3 +108,49 @@ def test_noon_times_and_parent_section_pairing():
         ["Lec 1", "Dis 1A"],
         ["Lec 2", "Dis 2A"],
     ]
+
+
+def test_historical_lookup_only_expands_the_requested_course(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        text = "<html>Archive index without course rows</html>"
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    captured = {}
+
+    def fake_quarter(quarter, department, **kwargs):
+        captured.update(
+            quarter=quarter,
+            department=department,
+            kwargs=kwargs,
+        )
+        return []
+
+    monkeypatch.setattr(soc_module, "_recent_quarters", lambda count: ["Spring 2026"])
+    monkeypatch.setattr(soc_module.httpx, "Client", FakeClient)
+    monkeypatch.setattr(soc_module, "scrape_quarter_courses", fake_quarter)
+
+    assert scrape_historical_enrollment("COM SCI 111") == []
+    assert captured == {
+        "quarter": "Spring 2026",
+        "department": "COM SCI",
+        "kwargs": {
+            "course_codes": ["COM SCI 111"],
+            "max_courses": 1,
+            "request_timeout_seconds": 6,
+            "request_retries": 0,
+            "log_failures": False,
+        },
+    }

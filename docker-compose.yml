@@ -2,27 +2,27 @@ services:
   planner:
     build: .
     ports:
-      - "8765:8765"
+      # Local development default: do not expose student data to the LAN.
+      - "127.0.0.1:8765:8765"
+    extra_hosts:
+      # Lets the local-only custom-model option reach Ollama/vLLM on the host.
+      - "host.docker.internal:host-gateway"
     environment:
       PLANNER_DATABASE_PATH: /app/.data/planner.sqlite3
       PLANNER_JOB_WORKERS: "${PLANNER_JOB_WORKERS:-2}"
       PLANNER_MAX_QUEUED_JOBS: "${PLANNER_MAX_QUEUED_JOBS:-20}"
       PLANNER_JOB_RETENTION_DAYS: "${PLANNER_JOB_RETENTION_DAYS:-7}"
+      PLANNER_PERSIST_GRAPH_CHECKPOINTS: "${PLANNER_PERSIST_GRAPH_CHECKPOINTS:-false}"
       PLANNER_MAX_COURSES_PER_DEPARTMENT: "${PLANNER_MAX_COURSES_PER_DEPARTMENT:-12}"
       PLANNER_ENABLE_GRADES: "${PLANNER_ENABLE_GRADES:-true}"
-      PLANNER_ENABLE_HISTORICAL_ENROLLMENT: "${PLANNER_ENABLE_HISTORICAL_ENROLLMENT:-false}"
-      PLANNER_ENABLE_BRUINWALK: "${PLANNER_ENABLE_BRUINWALK:-false}"
-      MODEL_PROVIDER: "${MODEL_PROVIDER:-openai_compatible}"
-      MODEL_API_KEY: "${MODEL_API_KEY:-}"
-      MODEL_BASE_URL: "${MODEL_BASE_URL:-https://api.openai.com/v1}"
-      MODEL_NAME: "${MODEL_NAME:-gpt-4o-mini}"
-      MODEL_TEMPERATURE: "${MODEL_TEMPERATURE:-0}"
+      PLANNER_ENABLE_HISTORICAL_ENROLLMENT: "${PLANNER_ENABLE_HISTORICAL_ENROLLMENT:-true}"
+      PLANNER_ENABLE_BRUINWALK: "${PLANNER_ENABLE_BRUINWALK:-true}"
       LANGSMITH_TRACING: "${LANGSMITH_TRACING:-false}"
       LANGSMITH_API_KEY: "${LANGSMITH_API_KEY:-}"
       LANGSMITH_PROJECT: "${LANGSMITH_PROJECT:-ucla-course-planner}"
       FRONTEND_ORIGINS: "${FRONTEND_ORIGINS:-}"
-      ALLOW_INSECURE_MODEL_BASE_URLS: "${ALLOW_INSECURE_MODEL_BASE_URLS:-false}"
-      ALLOW_PRIVATE_MODEL_BASE_URLS: "${ALLOW_PRIVATE_MODEL_BASE_URLS:-false}"
+      PLANNER_PUBLIC_DEPLOYMENT: "${PLANNER_PUBLIC_DEPLOYMENT:-false}"
+      MODEL_HOST_ALLOWLIST: "${MODEL_HOST_ALLOWLIST:-}"
     volumes:
       - planner-data:/app/.data
     restart: unless-stopped

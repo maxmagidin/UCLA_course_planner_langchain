@@ -1,9 +1,4 @@
-"""Optional HTTP API with transient bring-your-own-key support.
-
-This is intentionally separate from the Agent Chat Protocol adapter. A client
-may send a provider key for a single intake request; the key is not written to
-PlannerState, checkpoints, reports, or logs by this module.
-"""
+"""FastAPI boundary for deterministic planning and optional BYOK enhancement."""
 
 from __future__ import annotations
 
@@ -30,34 +25,32 @@ from course_planner.documents import (
     extract_text_from_pdf_base64,
 )
 from course_planner.graph import run_planner
-from course_planner.intake import extract_profile
+from course_planner.intake import PreferenceValidationError, enhance_planning
 from course_planner.jobs import JobQueueFull, get_job_manager
 from course_planner.persistence import database_ready
-from course_planner.planner_models import ModelConfig, PlannerResult, StudentProfile
+from course_planner.planner_models import (
+    EnhancementContext,
+    EnhancementResponse,
+    ModelConfig,
+    PlannerResult,
+    StudentProfile,
+)
 from course_planner.roadmap import suggest_roadmap
 from course_planner.terms import parse_ucla_term
 
 
-class ConversationMessage(BaseModel):
-    role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=50_000)
+class PlanningEnhanceRequest(BaseModel):
+    model_config = {"extra": "forbid"}
 
-
-class ChatRequest(BaseModel):
-    conversation: list[ConversationMessage] = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=10_000)
+    context: EnhancementContext
     model: ModelConfig
-    dars_text: str | None = Field(default=None, max_length=2_000_000)
-    dars_pdf_base64: str | None = Field(default=None, max_length=30_000_000)
-
-
-class IntakeRequest(ChatRequest):
-    pass
 
 
 class PlanRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     profile: StudentProfile
-    dars_text: str | None = Field(default=None, max_length=2_000_000)
-    dars_pdf_base64: str | None = Field(default=None, max_length=30_000_000)
 
 
 class HorizonTerm(BaseModel):
@@ -156,6 +149,8 @@ class PlannerJobResponse(BaseModel):
 
 
 class DarsParseRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     dars_text: str | None = Field(default=None, max_length=2_000_000)
     dars_pdf_base64: str | None = Field(default=None, max_length=30_000_000)
 
@@ -169,6 +164,11 @@ class DarsParseResponse(BaseModel):
     remaining_courses: list[str]
     unclassified_courses: list[str]
     profile_hints: dict[str, str | float]
+    profile_draft: dict[str, Any]
+    course_buckets: dict[str, list[str]]
+    provenance: dict[str, str]
+    missing_fields: list[str]
+    warnings: list[str]
 
 
 @asynccontextmanager
@@ -187,9 +187,7 @@ async def security_headers(request: FastAPIRequest, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["X-Frame-Options"] = "DENY"
-    if request.url.path.startswith(
-        ("/api/", "/jobs/", "/plan/", "/dars/", "/intake", "/chat")
-    ):
+    if request.url.path.startswith(("/api/", "/jobs/", "/plan/", "/dars/")):
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -258,7 +256,6 @@ def ready() -> dict[str, Any]:
     }
 
 
-@app.post("/dars/parse", response_model=DarsParseResponse)
 @app.post("/api/dars/parse", response_model=DarsParseResponse)
 async def parse_dars(request: DarsParseRequest) -> DarsParseResponse:
     text = await asyncio.to_thread(
@@ -269,6 +266,27 @@ async def parse_dars(request: DarsParseRequest) -> DarsParseResponse:
             status_code=400, detail="Paste DARS text or upload a readable DARS PDF"
         )
     classified = classify_dars_courses(text)
+    hints = extract_dars_hints(text)
+    course_buckets = {
+        "completed": classified["completed"],
+        "in_progress": classified["in_progress"],
+        "remaining": classified["remaining"],
+        "unclassified": classified["unclassified"],
+    }
+    profile_draft = {
+        **hints,
+        "dars_courses": classified["completed"],
+        "dars_in_progress_courses": classified["in_progress"],
+        "dars_remaining_courses": classified["remaining"] + classified["unclassified"],
+    }
+    missing_fields = [
+        field for field in ("name", "major", "term") if field not in hints
+    ]
+    warnings = [
+        "Course classification is reviewable; only confirmed completed courses should be used for eligibility."
+    ]
+    if classified["unclassified"]:
+        warnings.append("Some course codes could not be classified and require review.")
     return DarsParseResponse(
         source="pdf" if request.dars_pdf_base64 else "text",
         character_count=len(text),
@@ -277,27 +295,36 @@ async def parse_dars(request: DarsParseRequest) -> DarsParseResponse:
         in_progress_courses=classified["in_progress"],
         remaining_courses=classified["remaining"],
         unclassified_courses=classified["unclassified"],
-        profile_hints=extract_dars_hints(text),
+        profile_hints=hints,
+        profile_draft=profile_draft,
+        course_buckets=course_buckets,
+        provenance={field: "dars" for field in hints},
+        missing_fields=missing_fields,
+        warnings=warnings,
     )
 
 
-@app.post("/intake", response_model=StudentProfile)
-@app.post("/api/intake", response_model=StudentProfile)
-async def intake(request: IntakeRequest) -> StudentProfile:
-    conversation = await asyncio.to_thread(_add_document_context, request)
-    profile = await _extract_profile_with_provider(conversation, request.model)
-    return await asyncio.to_thread(
-        _apply_dars, profile, request.dars_text, request.dars_pdf_base64
-    )
+@app.post("/api/planning/enhance", response_model=EnhancementResponse)
+async def planning_enhance(request: PlanningEnhanceRequest) -> EnhancementResponse:
+    try:
+        return await asyncio.to_thread(
+            enhance_planning,
+            request.description,
+            request.context,
+            request.model,
+        )
+    except PreferenceValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Model enhancement failed") from exc
 
 
 @app.post("/plan", response_model=PlannerResult)
 @app.post("/api/plan", response_model=PlannerResult)
 async def plan(request: PlanRequest) -> PlannerResult:
-    profile = await asyncio.to_thread(
-        _apply_dars, request.profile, request.dars_text, request.dars_pdf_base64
-    )
-    return await asyncio.to_thread(run_planner, profile)
+    return await asyncio.to_thread(run_planner, request.profile)
 
 
 @app.post("/plan/horizon", response_model=HorizonPlanResponse)
@@ -360,21 +387,6 @@ async def roadmap_suggestion(request: RoadmapRequest) -> RoadmapResponse:
         unplaced_courses=suggestion.unplaced_courses,
         warnings=suggestion.warnings,
     )
-
-
-@app.post("/chat", response_model=dict[str, Any])
-@app.post("/api/chat", response_model=dict[str, Any])
-async def chat(request: ChatRequest) -> dict[str, Any]:
-    conversation = await asyncio.to_thread(_add_document_context, request)
-    profile = await _extract_profile_with_provider(conversation, request.model)
-    profile = await asyncio.to_thread(
-        _apply_dars, profile, request.dars_text, request.dars_pdf_base64
-    )
-    result = await asyncio.to_thread(run_planner, profile)
-    return {
-        "profile": profile.model_dump(mode="json"),
-        "result": result.model_dump(mode="json"),
-    }
 
 
 def _run_horizon_job(
@@ -467,45 +479,6 @@ def _run_horizon(
     )
 
 
-async def _extract_profile_with_provider(
-    conversation: list[dict[str, str]], model: ModelConfig
-) -> StudentProfile:
-    try:
-        return await asyncio.to_thread(extract_profile, conversation, model)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Model-assisted intake failed. Check the API key, provider, "
-                "model name, and the details you supplied."
-            ),
-        ) from exc
-
-
-def _add_document_context(request: ChatRequest) -> list[dict[str, str]]:
-    conversation = [item.model_dump() for item in request.conversation]
-    text = _document_text(request.dars_text, request.dars_pdf_base64)
-    if text:
-        classified = classify_dars_courses(text)
-        codes = classified["completed"]
-        conversation.append(
-            {
-                "role": "user",
-                "content": (
-                    "DARS completed courses extracted deterministically: "
-                    + ", ".join(codes)
-                    + ". In-progress courses: "
-                    + ", ".join(classified["in_progress"])
-                    + ". Remaining courses: "
-                    + ", ".join(classified["remaining"])
-                ),
-            }
-        )
-    return conversation
-
-
 def _document_text(dars_text: str | None, dars_pdf_base64: str | None) -> str | None:
     if dars_pdf_base64:
         try:
@@ -515,26 +488,3 @@ def _document_text(dars_text: str | None, dars_pdf_base64: str | None) -> str | 
                 status_code=400, detail=f"Could not read DARS PDF: {exc}"
             ) from exc
     return dars_text
-
-
-def _apply_dars(
-    profile: StudentProfile,
-    dars_text: str | None,
-    dars_pdf_base64: str | None,
-) -> StudentProfile:
-    text = _document_text(dars_text, dars_pdf_base64)
-    if not text:
-        return profile
-    classified = classify_dars_courses(text)
-    return profile.model_copy(
-        update={
-            "dars_text": text,
-            "dars_courses": sorted(set(profile.dars_courses + classified["completed"])),
-            "dars_in_progress_courses": sorted(
-                set(profile.dars_in_progress_courses + classified["in_progress"])
-            ),
-            "dars_remaining_courses": sorted(
-                set(profile.dars_remaining_courses + classified["remaining"])
-            ),
-        }
-    )

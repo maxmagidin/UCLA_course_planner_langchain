@@ -56,22 +56,30 @@ _SHEETS: list[dict[str, str]] = [
 
 # GPA points for each letter grade
 _GPA_MAP: dict[str, float] = {
-    "A+": 4.0, "A": 4.0, "A-": 3.7,
-    "B+": 3.3, "B": 3.0, "B-": 2.7,
-    "C+": 2.3, "C": 2.0, "C-": 1.7,
-    "D+": 1.3, "D": 1.0, "D-": 0.7,
+    "A+": 4.0,
+    "A": 4.0,
+    "A-": 3.7,
+    "B+": 3.3,
+    "B": 3.0,
+    "B-": 2.7,
+    "C+": 2.3,
+    "C": 2.0,
+    "C-": 1.7,
+    "D+": 1.3,
+    "D": 1.0,
+    "D-": 0.7,
     "F": 0.0,
 }
 
 # Map from grade letter to the count column name we look for in the CSV.
 # UCLA sheets typically have columns like "A+", "A", "A-", "B+", …
-_GRADE_COLS = ["A+", "A", "A-", "B+", "B", "B-",
-               "C+", "C", "C-", "D+", "D", "D-", "F"]
+_GRADE_COLS = ["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "D-", "F"]
 
 
 # ---------------------------------------------------------------------------
 # Column-name normalisation
 # ---------------------------------------------------------------------------
+
 
 def _find_col(df: pd.DataFrame, *candidates: str) -> str | None:
     """Return the first column from *candidates* that exists (case-insensitive)."""
@@ -95,15 +103,19 @@ def _safe_int(val) -> int:
 # Core: download + parse all sheets
 # ---------------------------------------------------------------------------
 
+
 # Each row becomes a _RawRow for aggregation.
 class _RawRow:
     __slots__ = (
-        "course_code", "instructor", "quarter",
         "counts",  # dict[str, int] — grade -> count
+        "course_code",
+        "instructor",
+        "quarter",
     )
 
-    def __init__(self, course_code: str, instructor: str, quarter: str,
-                 counts: dict[str, int]):
+    def __init__(
+        self, course_code: str, instructor: str, quarter: str, counts: dict[str, int]
+    ):
         self.course_code = course_code
         self.instructor = instructor
         self.quarter = quarter
@@ -150,12 +162,15 @@ def _parse_rows(df: pd.DataFrame, label: str) -> list[_RawRow]:
     if not (subj_col and catalog_col and grade_col and count_col):
         logger.warning(
             "Could not identify required columns in sheet %s. Columns: %s",
-            label, list(df.columns),
+            label,
+            list(df.columns),
         )
         return []
 
     # --- Group rows by (course_code, instructor, quarter) and pivot grades ---
-    grouped: dict[tuple[str, str, str], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    grouped: dict[tuple[str, str, str], dict[str, int]] = defaultdict(
+        lambda: defaultdict(int)
+    )
 
     for _, row in df.iterrows():
         subj = str(row.get(subj_col, "")).strip()
@@ -188,6 +203,7 @@ def _parse_rows(df: pd.DataFrame, label: str) -> list[_RawRow]:
 # ---------------------------------------------------------------------------
 # Aggregation → GradeDistribution
 # ---------------------------------------------------------------------------
+
 
 def _aggregate(rows: list[_RawRow]) -> GradeDistribution:
     """Aggregate multiple _RawRow objects into one GradeDistribution."""
@@ -232,8 +248,11 @@ def _aggregate(rows: list[_RawRow]) -> GradeDistribution:
     median_gpa = 0.0
     if n > 0:
         mid = n // 2
-        median_gpa = (sorted_gpas[mid] if n % 2 == 1
-                      else (sorted_gpas[mid - 1] + sorted_gpas[mid]) / 2)
+        median_gpa = (
+            sorted_gpas[mid]
+            if n % 2 == 1
+            else (sorted_gpas[mid - 1] + sorted_gpas[mid]) / 2
+        )
 
     std_dev_gpa = 0.0
     if n > 1:
@@ -334,8 +353,7 @@ def load_grade_data() -> dict[str, dict[str, GradeDistribution]]:
     # Group by (course_code, instructor)
     grouped: dict[tuple[str, str], list[_RawRow]] = defaultdict(list)
     for r in all_rows:
-        key = (" ".join(r.course_code.upper().split()),
-               r.instructor.strip())
+        key = (" ".join(r.course_code.upper().split()), r.instructor.strip())
         grouped[key].append(r)
 
     # Aggregate

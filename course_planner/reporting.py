@@ -71,6 +71,40 @@ def build_report(
         lines.extend(
             [
                 "",
+                "## Rating evidence",
+                "",
+                "| Course | Professor rating (adjusted/raw) | Reviews | Confidence | Source |",
+                "|---|---:|---:|---|---|",
+            ]
+        )
+        for course in top.courses:
+            details = course.get("rating_evidence", [])
+            detail = next(
+                (item for item in details if item.get("adjusted_rating") is not None),
+                None,
+            )
+            if detail:
+                adjusted = float(detail["adjusted_rating"])
+                raw = detail.get("raw_rating")
+                rating = (
+                    f"{adjusted:.2f} / {float(raw):.2f}"
+                    if raw is not None
+                    else f"{adjusted:.2f}"
+                )
+                count = str(detail.get("review_count", 0))
+                confidence = detail.get("confidence", "low")
+            else:
+                rating, count, confidence = "missing", "0", "low"
+            source_url = detail.get("source_url", "") if detail else ""
+            source = (
+                f"[Bruinwalk]({source_url})" if source_url else "Bruinwalk (if enabled)"
+            )
+            lines.append(
+                f"| {course['course_code']} | {rating} | {count} | {confidence} | {source} |"
+            )
+        lines.extend(
+            [
+                "",
                 "## Recommended meeting times",
                 "",
                 "| Day | Course | Section | Time | Instructor | Location |",

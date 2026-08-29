@@ -1,7 +1,7 @@
 """Side-effect-free deterministic schedule generation.
 
-This module deliberately has no ``uagents`` imports, so it is safe to invoke
-from FastAPI worker threads, tests, the CLI, and LangGraph nodes.
+This module is safe to invoke from FastAPI worker threads, tests, the CLI, and
+LangGraph nodes.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import itertools
 import re
 
+from course_planner.constraints import ConstraintParseError, parse_constraints
 from course_planner.utils import (
     CourseOption,
     DaySchedule,
@@ -51,7 +52,7 @@ def parse_minutes(value: str) -> int | None:
 def _section_time_blocks(section: Section) -> list[tuple[str, int, int]]:
     start = parse_minutes(section.start_time)
     end = parse_minutes(section.end_time)
-    if start is None or end is None:
+    if start is None or end is None or end <= start:
         return []
     return [
         (day, start, end)
@@ -72,59 +73,26 @@ def _blocks_conflict(
 
 
 def _parse_constraints(profile: StudentProfile) -> dict:
-    days_off: set[str] = set()
-    no_before: int | None = None
-    no_after: int | None = None
-    max_gap: int | None = None
-    max_consecutive: int | None = None
-
-    for constraint in profile.hard_constraints or []:
-        lowered = constraint.lower().strip()
-        for day_name in (
-            "monday",
-            "tuesday",
-            "wednesday",
-            "thursday",
-            "friday",
-            "saturday",
-            "sunday",
-        ):
-            if day_name in lowered and any(
-                word in lowered for word in ("off", "no", "free")
-            ):
-                days_off.add(day_name.capitalize())
-
-        match = re.search(
-            r"(?:before|earlier than)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)",
-            lowered,
-        )
-        if match and (minutes := parse_minutes(match.group(1))) is not None:
-            no_before = minutes
-
-        match = re.search(
-            r"(?:after|later than)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)",
-            lowered,
-        )
-        if match and (minutes := parse_minutes(match.group(1))) is not None:
-            no_after = minutes
-
-        match = re.search(r"(\d+)\s*(?:min|minute).*gap", lowered)
-        if match:
-            max_gap = int(match.group(1))
-
-        match = re.search(
-            r"(\d+)\s*(?:min|minute).*(?:consecutive|back.to.back|straight)",
-            lowered,
-        )
-        if match:
-            max_consecutive = int(match.group(1))
-
+    try:
+        parsed = parse_constraints(profile.hard_constraints)
+    except ConstraintParseError:
+        # Keep the scheduler's existing result contract: unsupported values are
+        # reported as warnings rather than silently changing semantics.
+        return {
+            "days_off": set(),
+            "no_before": None,
+            "no_after": None,
+            "max_gap": None,
+            "max_consecutive": None,
+            "unsupported": list(profile.hard_constraints or []),
+        }
     return {
-        "days_off": days_off,
-        "no_before": no_before,
-        "no_after": no_after,
-        "max_gap": max_gap,
-        "max_consecutive": max_consecutive,
+        "days_off": set(parsed.days_off),
+        "no_before": parsed.no_before,
+        "no_after": parsed.no_after,
+        "max_gap": parsed.max_gap,
+        "max_consecutive": parsed.max_consecutive,
+        "unsupported": [],
     }
 
 
@@ -157,7 +125,10 @@ def group_sections(course: CourseOption) -> list[list[Section]]:
                 _section_time_blocks(discussion),
             ):
                 options.append([lecture, discussion])
-    return options or [[lecture] for lecture in lectures]
+    # A linked discussion/lab is part of the enrollment choice. If none can be
+    # paired with a lecture, returning the lecture alone would produce a plan
+    # the student cannot actually enroll in.
+    return options
 
 
 def _clamp(value: float) -> float:
@@ -248,6 +219,20 @@ def _valid_section_pick(
                 "prerequisite_status": course.prerequisite_status,
                 "prerequisite_summary": course.prerequisite_summary,
                 "catalog_url": course.catalog_url,
+                "rating_score": course.rating_score,
+                "rating_evidence": [
+                    {
+                        "instructor": section.instructor,
+                        "raw_rating": section.professor_rating_raw,
+                        "adjusted_rating": section.professor_rating_adjusted,
+                        "review_count": section.professor_rating_count,
+                        "confidence": section.professor_rating_confidence,
+                        "match_status": section.professor_rating_match_status,
+                        "source": section.professor_rating_source,
+                        "source_url": section.professor_rating_source_url,
+                    }
+                    for section in sections
+                ],
                 "meeting_times_verified": all(
                     _section_time_blocks(section) for section in sections
                 ),
@@ -337,6 +322,13 @@ def generate_schedules(
 ) -> list[ScheduleCandidate]:
     """Build, hard-filter, score, and return up to 20 schedule candidates."""
     constraints = _parse_constraints(profile)
+    if constraints["unsupported"]:
+        rendered = "; ".join(constraints["unsupported"])
+        raise ValueError(
+            "Unsupported hard constraint syntax: "
+            f"{rendered}. Use days off, earliest/latest class time, maximum gap "
+            "minutes, or maximum consecutive minutes."
+        )
     preferred = profile.format_preference.lower().strip()
     preferred_formats = {preferred} if preferred and preferred != "any" else set()
     candidates: list[ScheduleCandidate] = []
@@ -391,8 +383,8 @@ def generate_schedules(
                 ]
                 if section_ratings:
                     ratings.append(sum(section_ratings) / len(section_ratings))
-                elif course.bruinwalk_composite_score is not None:
-                    ratings.append(course.bruinwalk_composite_score)
+                elif course.rating_score is not None:
+                    ratings.append(course.rating_score)
                 section_grades = [
                     section.avg_gpa
                     for section in sections
@@ -436,7 +428,7 @@ def generate_schedules(
                         and all(item == "medium" for item in enrollment_confidences)
                         else "low"
                     ),
-                    avg_bruinwalk_composite=round(sum(ratings) / len(ratings), 4)
+                    avg_rating_score=round(sum(ratings) / len(ratings), 4)
                     if ratings
                     else None,
                     avg_gpa=round(sum(grades) / len(grades), 3) if grades else None,

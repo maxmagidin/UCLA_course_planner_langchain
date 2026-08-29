@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import Future
 
 from course_planner.jobs import PlannerJobManager
 from course_planner.persistence import database_ready, planner_checkpointer
@@ -27,14 +28,14 @@ def test_sqlite_checkpointer_and_job_result_survive_connections(tmp_path, monkey
     try:
         job = manager.submit(
             "test",
-            {"profile": {"name": "Test", "dars_text": "private raw text"}},
+            {"profile": {"name": "Test"}},
             lambda payload, progress, cancel: {"status": "completed", "value": 42},
         )
         completed = _wait_for(manager, job["id"], {"completed"})
         assert completed["result"] == {"status": "completed", "value": 42}
         assert database_ready() == (True, str(database))
         stored = database.read_bytes()
-        assert b"private raw text" not in stored
+        assert b"Test" in stored
     finally:
         manager.shutdown()
 
@@ -81,5 +82,29 @@ def test_late_cancellation_update_cannot_overwrite_terminal_status(
         )
 
         assert manager.get(job["id"])["status"] == completed["status"]
+    finally:
+        manager.shutdown()
+
+
+def test_cancellation_token_is_published_before_executor_submission(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PLANNER_DATABASE_PATH", str(tmp_path / "submit-race.sqlite3"))
+    manager = PlannerJobManager()
+
+    class InspectingExecutor:
+        def submit(self, fn, job_id, payload, runner, cancel_event):
+            assert manager._cancel_events.get(job_id) is cancel_event
+            future = Future()
+            future.set_result(None)
+            return future
+
+        def shutdown(self, **kwargs):
+            pass
+
+    manager._executor.shutdown(wait=True)
+    manager._executor = InspectingExecutor()
+    try:
+        manager.submit("test", {}, lambda payload, progress, cancel: {})
     finally:
         manager.shutdown()

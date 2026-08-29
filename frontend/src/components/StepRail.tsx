@@ -3,10 +3,10 @@ import { Check, FileSearch, GraduationCap, ListChecks, Sparkles } from 'lucide-r
 import { cn } from '@/lib/utils'
 
 const steps = [
-  { label: 'DARS', detail: 'Upload or paste your audit', icon: FileSearch },
-  { label: 'Student', detail: 'Review your information', icon: GraduationCap },
-  { label: 'Plan', detail: 'Choose quarter or year', icon: ListChecks },
-  { label: 'Results', detail: 'Compare schedules', icon: Sparkles },
+  { label: 'Import', detail: 'DARS or manual source', icon: FileSearch },
+  { label: 'Review', detail: 'Confirm profile and buckets', icon: GraduationCap },
+  { label: 'Configure', detail: 'Preferences and deterministic run', icon: ListChecks },
+  { label: 'Results', detail: 'Compare evidence-backed schedules', icon: Sparkles },
 ]
 
 interface StepRailProps {

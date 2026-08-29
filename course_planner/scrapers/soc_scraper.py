@@ -265,6 +265,9 @@ def scrape_quarter_courses(
     *,
     course_codes: list[str] | None = None,
     max_courses: int | None = None,
+    request_timeout_seconds: float = 30,
+    request_retries: int = 2,
+    log_failures: bool = True,
 ) -> list[dict]:
     """Scrape course listings for *department* in *quarter* from UCLA SOC.
 
@@ -294,9 +297,12 @@ def scrape_quarter_courses(
     try:
         with httpx.Client(
             headers=_HEADERS,
-            timeout=httpx.Timeout(30, connect=8),
+            timeout=httpx.Timeout(
+                request_timeout_seconds,
+                connect=min(8, request_timeout_seconds),
+            ),
             follow_redirects=True,
-            transport=httpx.HTTPTransport(retries=2),
+            transport=httpx.HTTPTransport(retries=request_retries),
         ) as client:
             # The initial request establishes the ASP.NET session required by
             # every expandable-course request that follows.
@@ -387,7 +393,15 @@ def scrape_quarter_courses(
                     )
 
     except Exception:
-        logger.exception("SOC scrape failed for %s / %s", quarter, department)
+        if log_failures:
+            logger.exception("SOC scrape failed for %s / %s", quarter, department)
+        else:
+            logger.debug(
+                "Optional SOC scrape failed for %s / %s",
+                quarter,
+                department,
+                exc_info=True,
+            )
 
     return courses
 
@@ -456,10 +470,12 @@ def scrape_historical_enrollment(course_code: str) -> list[dict]:
     """Scrape historical enrollment data for *course_code* from the UCLA
     Schedule of Classes archive.
 
-    Returns up to 8 past quarters of data, each dict containing:
+    Returns up to 4 past quarters of data, each dict containing:
         quarter, final_enrollment, capacity, went_to_waitlist, snapshot_type
     """
-    quarters = _recent_quarters(8)
+    # One recent academic-year cycle is enough to expose recurring demand
+    # without multiplying an ordinary plan into an unbounded archive crawl.
+    quarters = _recent_quarters(4)
     # Normalize course code for URL matching
     code_norm = " ".join(course_code.upper().split())
     dept = code_norm.rsplit(" ", 1)[0] if " " in code_norm else code_norm
@@ -469,13 +485,51 @@ def scrape_historical_enrollment(course_code: str) -> list[dict]:
     for qtr in quarters:
         term = _term_code(qtr)
         try:
+            # Query only the requested archived course first. The general SOC
+            # parser already understands UCLA's course-detail response and is
+            # more precise than searching the archive index's flattened text.
+            archived = scrape_quarter_courses(
+                qtr,
+                dept,
+                course_codes=[code_norm],
+                max_courses=1,
+                request_timeout_seconds=6,
+                request_retries=0,
+                log_failures=False,
+            )
+            matching = [
+                course
+                for course in archived
+                if " ".join(course.get("course_code", "").upper().split()) == code_norm
+            ]
+            for course in matching:
+                sections = course.get("sections", [])
+                if not sections:
+                    continue
+                section = sections[0]
+                enrolled = int(section.get("enrolled", 0))
+                capacity = int(section.get("capacity", 0))
+                waitlist = int(section.get("waitlist", 0))
+                results.append(
+                    {
+                        "quarter": qtr,
+                        "final_enrollment": enrolled,
+                        "capacity": capacity,
+                        "went_to_waitlist": waitlist > 0,
+                        "snapshot_type": "final",
+                    }
+                )
+            if matching:
+                continue
+
+            # Some older terms are no longer served by the SOC search. Fall
+            # back to the Registrar archive page with the same short budget.
             with httpx.Client(
                 headers=_HEADERS,
-                timeout=httpx.Timeout(20, connect=8),
+                timeout=httpx.Timeout(6, connect=6),
                 follow_redirects=True,
-                transport=httpx.HTTPTransport(retries=2),
+                transport=httpx.HTTPTransport(retries=0),
             ) as client:
-                # Try the archive page for this quarter
                 resp = client.get(
                     ARCHIVE_URL,
                     params={"term": term},
@@ -485,36 +539,7 @@ def scrape_historical_enrollment(course_code: str) -> list[dict]:
 
                 soup = BeautifulSoup(resp.text, "html.parser")
                 page_text = soup.get_text(" ", strip=True)
-
-                # Look for our course code in the page
                 if code_norm not in page_text.upper():
-                    # Try the SOC for the archived quarter directly
-                    archived = scrape_quarter_courses(qtr, dept)
-                    matching = [
-                        c
-                        for c in archived
-                        if " ".join(c.get("course_code", "").upper().split())
-                        == code_norm
-                    ]
-                    if not matching:
-                        continue
-                    for c in matching:
-                        secs = c.get("sections", [])
-                        if not secs:
-                            continue
-                        s = secs[0]
-                        enrolled = int(s.get("enrolled", 0))
-                        cap = int(s.get("capacity", 0))
-                        wl = int(s.get("waitlist", 0))
-                        results.append(
-                            {
-                                "quarter": qtr,
-                                "final_enrollment": enrolled,
-                                "capacity": cap,
-                                "went_to_waitlist": wl > 0,
-                                "snapshot_type": "final",
-                            }
-                        )
                     continue
 
                 # Parse enrollment data from the archive page

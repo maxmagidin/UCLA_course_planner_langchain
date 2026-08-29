@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Field, Input, Select, Textarea } from '@/components/ui/field'
 import { cn } from '@/lib/utils'
-import type { ConstraintsState, EditableTerm, StudentProfile } from '@/types'
+import { ByokPanel } from '@/components/ByokPanel'
+import type { ConstraintsState, EditableTerm, EnhancementProposal, StudentProfile } from '@/types'
 
 const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
 
@@ -33,6 +34,7 @@ interface PlanningStepProps {
   onBack: () => void
   onRun: () => void
   onCancel: () => void
+  onApplyEnhancement: (proposal: EnhancementProposal) => void
 }
 
 export function PlanningStep({
@@ -58,6 +60,7 @@ export function PlanningStep({
   onBack,
   onRun,
   onCancel,
+  onApplyEnhancement,
 }: PlanningStepProps) {
   const updateTerm = (id: string, patch: Partial<EditableTerm>) => {
     onTermsChange(terms.map((term) => term.id === id ? { ...term, ...patch } : term))
@@ -66,6 +69,10 @@ export function PlanningStep({
     onProfileChange({ ...profile, [key]: value })
   }
   const yearOptions = Array.from({ length: 5 }, (_, index) => new Date().getFullYear() - 1 + index)
+  const horizonTerms = terms.map((term) => ({ term: term.term, required_courses: term.requiredText.split(/[\n,;]+/).map((course) => course.trim().toUpperCase()).filter(Boolean), preferred_courses: term.preferredText.split(/[\n,;]+/).map((course) => course.trim().toUpperCase()).filter(Boolean), min_units: term.minUnits, max_units: term.maxUnits }))
+  const hardConstraints = [constraints.daysOff.length ? `Days off: ${constraints.daysOff.join(', ')}` : '', constraints.earliest ? `No classes before ${constraints.earliest}` : '', constraints.latest ? `No classes after ${constraints.latest}` : '', ...constraints.additional.split('\n').map((item) => item.trim())].filter(Boolean)
+  const rankingWeights = { weight_enrollment_chance: profile.weight_enrollment_chance, weight_professor_rating: profile.weight_professor_rating, weight_avg_gpa: profile.weight_avg_gpa, weight_schedule_quality: profile.weight_schedule_quality, weight_workload: profile.weight_workload }
+  const allowedCourses = Array.from(new Set([...auditRemainingCourses, ...horizonTerms.flatMap((term) => [...term.required_courses, ...term.preferred_courses])]))
 
   return (
     <div className="space-y-5">
@@ -159,6 +166,20 @@ export function PlanningStep({
           )}
         </CardContent>
       </Card>
+
+      <Card className="overflow-hidden border-ucla-blue/20">
+        <CardHeader className="border-b border-slate-100 bg-white">
+          <Badge className="w-fit" variant="success">Deterministic by default</Badge>
+          <CardTitle className="mt-2">Choose how preferences enter the plan</CardTitle>
+          <CardDescription className="max-w-3xl">The no-key path uses official UCLA data, reproducible prerequisite checks, and the same ranking code every time. An optional BYOK model can translate natural language into a proposal—but it cannot edit DARS facts, prerequisites, UCLA facts, rating data, or ranking logic.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 pt-6 md:grid-cols-2">
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-5"><h3 className="font-extrabold text-emerald-950">No key · deterministic plan</h3><ul className="mt-3 space-y-2 text-sm leading-6 text-emerald-900"><li>✓ Official UCLA course and enrollment sources</li><li>✓ Reproducible prerequisite and conflict checks</li><li>✓ Transparent ratings, grades, and ranking evidence</li><li>✓ Runs immediately with no model account</li></ul></div>
+          <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-5"><h3 className="font-extrabold text-sky-950">Optional BYOK enhancement</h3><ul className="mt-3 space-y-2 text-sm leading-6 text-sky-900"><li>→ Translates your words into preference inputs</li><li>→ Shows before/after values for review</li><li>→ Requires explicit Apply suggestions</li><li>→ Cannot change authoritative facts or ranking code</li></ul></div>
+        </CardContent>
+      </Card>
+
+      <ByokPanel context={{ terms: horizonTerms, allowed_courses: allowedCourses, format_preference: profile.format_preference, hard_constraints: hardConstraints, ranking_weights: rankingWeights }} onApply={onApplyEnhancement} />
 
       <Card>
         <CardHeader>

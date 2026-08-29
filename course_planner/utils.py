@@ -41,7 +41,6 @@ class StudentProfile:
     enrollment_pass: EnrollmentPass
     pass_open_datetime: str
     term: str = ""
-    dars_text: str | None = None
     dars_courses: list[str] = field(default_factory=list)
     dars_in_progress_courses: list[str] = field(default_factory=list)
     dars_remaining_courses: list[str] = field(default_factory=list)
@@ -56,7 +55,6 @@ class StudentProfile:
     weight_avg_gpa: float = 0.20
     weight_schedule_quality: float = 0.20
     weight_workload: float = 0.15
-    reply_to_user: str = ""  # original user sender address, threaded through pipeline
 
 
 @dataclass
@@ -78,6 +76,13 @@ class Section:
     availability_confidence: str = "low"
     availability_risk: str = "unknown"
     professor_rating: float | None = None
+    professor_rating_raw: float | None = None
+    professor_rating_adjusted: float | None = None
+    professor_rating_count: int = 0
+    professor_rating_confidence: str = "low"
+    professor_rating_match_status: str = "unverified"
+    professor_rating_source: str = ""
+    professor_rating_source_url: str = ""
     avg_gpa: float | None = None
     workload_hours_per_week: float | None = None
 
@@ -103,10 +108,19 @@ class EnrollmentPrediction:
 @dataclass
 class ProfessorRatings:
     instructor_name: str
+    course_code: str = ""
+    matched_instructor_name: str = ""
     overall_rating: float | None = None
+    adjusted_rating: float | None = None
     difficulty_rating: float | None = None
     would_take_again_pct: float | None = None
     total_reviews: int = 0
+    rating_confidence: str = "low"
+    match_status: str = "unverified"
+    source: str = ""
+    source_url: str = ""
+    fetched_at: str = ""
+    status: str = "unknown"
     review_summary: str = ""
     most_common_positive: str = ""
     most_common_negative: str = ""
@@ -116,7 +130,13 @@ class ProfessorRatings:
 class CourseRatings:
     course_code: str
     overall_course_rating: float | None = None
+    adjusted_rating: float | None = None
     total_reviews: int = 0
+    rating_confidence: str = "low"
+    source: str = ""
+    source_url: str = ""
+    fetched_at: str = ""
+    status: str = "unknown"
     avg_hours_per_week: float | None = None
     avg_grade_expected: str = ""
 
@@ -170,7 +190,7 @@ class CourseOption:
     enrollment_prediction: EnrollmentPrediction | None = None
     professor_ratings: dict[str, ProfessorRatings] | None = None
     course_ratings: CourseRatings | None = None
-    bruinwalk_composite_score: float | None = None
+    rating_score: float | None = None
     grade_distribution: GradeDistribution | None = None
 
 
@@ -199,7 +219,7 @@ class ScheduleCandidate:
     min_enrollment_chance: float = 1.0
     enrollment_risk_level: str = "unknown"
     enrollment_confidence: str = "low"
-    avg_bruinwalk_composite: float | None = None
+    avg_rating_score: float | None = None
     avg_gpa: float | None = None
     min_gpa: float | None = None
     avg_workload_hours_per_week: float | None = None
@@ -292,17 +312,35 @@ def extract_pdf_text(base64_str: str) -> str:
     return "\n".join(text_parts)
 
 
-# ---------------------------------------------------------------------------
-# Agent addresses (fill in after each agent's first run)
-# ---------------------------------------------------------------------------
+def bayesian_adjusted_rating(
+    raw_rating: float | None,
+    review_count: int,
+    *,
+    prior_mean: float = 3.5,
+    prior_count: int = 10,
+) -> float | None:
+    """Conservatively adjust a rating using a 3.5/5 prior from 10 reviews.
 
-AGENT_ADDRESSES = {
-    "input": "agent1qvzm8976yty6m5zvtfpdhp55mxy0qdf6mhhzc557tvgs4gwv85ck6g7qpng",
-    "available_classes": "agent1qdq95wua88u00p6v5ae0qvl75gu3fplenxf58yhje8h6dgkmgdek29ghs4g",
-    "enrollment": "agent1q084cz3farmdfqmzllwn2nhtz5u5yty3p07xt63nuleaj0e7207jcgekvqr",
-    "bruinwalk": "agent1qwacpk27n6g60d8za7xg5s527fn84lphm0vgvdxa9f56fy0cpp20gum0d46",
-    "grade_dist": "agent1qwy2uv9h7r54w6dxmy20vvg5tthekglay9hu3czscjdqjnqa9560qcylll9",
-    "schedule": "agent1q00ey3trf2yzmkrgcuzty3sw03qmjk8lct56s42cke5cz7aa5tcusccs8wu",
-    "ranking": "agent1qvh2j5fll03v0ujv5l8v046jjevddetmyh0m2huszpy0ksag6wy9gz4vu8f",
-    "report": "agent1qdnzpjfwy5ymwsf9whag9vefg3m72lrzptpzs0l86re0caj4kargz07se9g",
-}
+    A zero-review result is missing evidence, not a 3.5 rating. This gives
+    5.0 from one review an adjusted 3.6364, below 4.8 from 200 reviews
+    (4.7381), and keeps tiny samples from dominating ranking.
+    """
+    if raw_rating is None or review_count <= 0:
+        return None
+    if prior_count < 0:
+        raise ValueError("prior_count must be non-negative")
+    if not 0 <= prior_mean <= 5:
+        raise ValueError("prior_mean must be between 0 and 5")
+    adjusted = (raw_rating * review_count + prior_mean * prior_count) / (
+        review_count + prior_count
+    )
+    return round(max(0.0, min(5.0, adjusted)), 4)
+
+
+def rating_confidence(review_count: int) -> str:
+    """Classify rating evidence: low (1–4), medium (5–24), high (25+)."""
+    if review_count >= 25:
+        return "high"
+    if review_count >= 5:
+        return "medium"
+    return "low"
